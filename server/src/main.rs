@@ -80,14 +80,14 @@ async fn ws_handler(
         None => return (StatusCode::UNAUTHORIZED, "token non valido").into_response(),
     };
 
-    ws.on_upgrade(move |socket| handle_socket(socket, user_id))
+    ws.on_upgrade(move |socket| do_server_side_socket_operations(socket, user_id))
         .into_response()
 }
 
 
 // Gestisce la connessione una volta "promossa" a WebSocket
-async fn handle_socket(mut socket: WebSocket, user_id: i64) {
-    println!("Client connesso");
+async fn do_server_side_socket_operations(mut socket: WebSocket, user_id: i64) {
+    println!("Client connesso: user_id = {user_id}");
 
     let mut interval = time::interval(Duration::from_secs(20));
 
@@ -107,14 +107,19 @@ async fn handle_socket(mut socket: WebSocket, user_id: i64) {
 
             // intanto ascolta anche eventuali messaggi/chiusura dal client
             incoming = socket.recv() => {
-                //TODO: here is the listening mechanism. For now we just print the messages received from the client. In the future we will use this channel to receive messages from the client and update the state of the server accordingly.
+                //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name. 
+                //In the future we will use this channel to receive messages from the client and make actions from the server accordingly.
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => {
                         println!("Connessione chiusa dal client");
                         break;
                     }
-                    Some(Ok(msg)) => {
-                        println!("Ricevuto dal client: {msg:?}");
+                    Some(Ok(Message::Text(text))) => {
+                        println!("Ricevuto da user_id {user_id}: {text}");
+                    }
+
+                    Some(Ok(_)) => {
+                        println!("Non text message received");
                     }
                     Some(Err(e)) => {
                         println!("Errore sul socket: {e}");

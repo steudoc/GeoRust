@@ -1,10 +1,20 @@
-use std::{fmt::format, io::{self, Write}, time::Duration};
+use std::io::{self, Write};
 
 use common::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse};
+use futures_util::{
+    stream::{SplitSink, SplitStream},
+    Sink, SinkExt, Stream, StreamExt,
+};
+use rand::Rng;
+use tokio::net::TcpStream;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{client::IntoClientRequest, Message},
+    MaybeTlsStream, WebSocketStream,
+};
 
 const SERVER_HTTP: &str = "http://127.0.0.1:3000";
-use futures_util::StreamExt;
-use tokio_tungstenite::{connect_async, tungstenite::{client::IntoClientRequest, Message}};
+const SERVER_WS: &str = "ws://127.0.0.1:3000/ws";
 
 // Nota: pwd letta e mostrata in chiaro. Per nascondere input vedi crate 'rpassword'
 fn read_line(message: &str) -> anyhow::Result<String> {
@@ -18,10 +28,8 @@ fn read_line(message: &str) -> anyhow::Result<String> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let http = reqwest::Client::new();
-    const SERVER_WS: &str = "ws://127.0.0.1:3000/ws";
 
     let login_resp: LoginResponse = loop {
-        // scelta registrazione/login da terminale
         let choice = loop {
             let answer = read_line("Register [r] - Login [l] ? ")?;
             match answer.to_lowercase().as_str() {
@@ -48,7 +56,6 @@ async fn main() -> anyhow::Result<()> {
                     println!("Registration: OK");
                 }
                 Ok(resp) if resp.status() == reqwest::StatusCode::CONFLICT => {
-                    // username già esistente, proviamo il login
                     println!("Registration: FAILED. \nUsername already registered, trying login...\n");
                 }
                 Ok(resp) => {
@@ -62,12 +69,11 @@ async fn main() -> anyhow::Result<()> {
             }
         }
 
-        // login - sempre eseguito
         let resp = match http
             .post(format!("{SERVER_HTTP}/login"))
             .json(&LoginRequest {
                 username: username.clone(), 
-                password: password.clone() 
+                password: password.clone()
             })
             .send()
             .await
@@ -78,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
         };
-        
+
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             println!("Login: FAILED. Wrong credentials, retry.\n");
             continue;
@@ -95,35 +101,78 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
         }
-    }; 
+    };
 
     println!("Login: OK, user_id = {}", login_resp.user_id);
-    //if login is okay, need open socket passing upgrade token:
+    let (mut write, mut read) = open_client_side_socket(&login_resp.token).await?;
+    do_client_side_socket_operations(&mut write, &mut read).await?;
+
+    Ok(())
+}
+
+async fn open_client_side_socket(
+    token: &str,
+) -> anyhow::Result<(
+    SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+    SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+)> {
     let mut request = SERVER_WS.into_client_request()?;
     request
         .headers_mut()
-        .insert("Authorization", format!("Bearer {}", login_resp.token).parse()?);
+        .insert("Authorization", format!("Bearer {token}").parse()?);
 
     let (ws_stream, _response) = connect_async(request).await?;
     println!("Connesso a {SERVER_WS}");
 
-    let (_write, mut read) = ws_stream.split();
+    Ok(ws_stream.split())
+}
 
-    while let Some(msg) = read.next().await {
-        //TODO: Here we receive messages from the server. We use this as receiving channel for both.
-        //In the initial implementationwhen we receive a message we just print it to the console. In the future we will use this channel to receive messages from the server and update the state of the client accordingly. 
-        match msg {
-            Ok(Message::Text(text)) => {
-                println!("Aggiornamento ricevuto: {text}");
+
+
+async fn do_client_side_socket_operations<S, R>(
+    write: &mut S,
+    read: &mut R,
+) -> anyhow::Result<()>
+where
+    S: Sink<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+    R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+    // Skip the immediate first tick if you don't want a send right at connection time:
+    // ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            // Branch 1: incoming messages from server
+            msg = read.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        println!("Aggiornamento ricevuto: {text}");
+                    }
+                    Some(Ok(Message::Close(_))) => {
+                        println!("Server ha chiuso la connessione");
+                        break;
+                    }
+                    Some(Ok(_)) => {}
+                    Some(Err(e)) => {
+                        println!("Errore: {e}");
+                        break;
+                    }
+                    None => {
+                        println!("Connessione chiusa");
+                        break;
+                    }
+                }
             }
-            Ok(Message::Close(_)) => {
-                println!("Server ha chiuso la connessione");
-                break;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                println!("Errore: {e}");
-                break;
+            
+            //TODO: edit here to send
+            // Current implementation for try: send a random number every 10 seconds
+            _ = ticker.tick() => {
+                let random_number: u32 = rand::thread_rng().gen_range(0..1000);
+                let payload = random_number.to_string();
+                write.send(Message::Text(payload.clone())).await?;
+                println!("Inviato numero casuale: {payload}");
             }
         }
     }
