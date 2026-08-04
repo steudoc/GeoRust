@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use common::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse};
+use common::{LoginRequest, LoginResponse, RegisterRequest};
 use futures_util::{
     stream::{SplitSink, SplitStream},
     Sink, SinkExt, Stream, StreamExt,

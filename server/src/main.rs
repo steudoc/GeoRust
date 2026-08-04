@@ -20,7 +20,6 @@ use headers::{Authorization, authorization::Bearer};
 use rand::Rng;
 use std::time::Duration;
 use tokio::time;
-use serde::{Deserialize, Serialize};
 
 
 
@@ -56,11 +55,6 @@ async fn main() -> anyhow::Result<()> {
 }
 
 
-// Handler che intercetta la richiesta di upgrade a WebSocket
-#[derive(Deserialize)]
-struct WsQuery {
-    token: String,
-}
 
 
 async fn ws_handler(
