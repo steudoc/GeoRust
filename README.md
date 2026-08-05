@@ -23,7 +23,7 @@ cargo run
  - [Server](./server/)
     - ...
  - [Common](./common/)
-    - ...
+    - [lib.rs](./common/src/lib.rs)
  - [Docs](./docs/)
     - [Report](./docs/report.md)
  - [Data](./data/)
