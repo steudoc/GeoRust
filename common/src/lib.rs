@@ -7,6 +7,7 @@ Contiene le strutture dati condivise tra client e server:
  - Messaggi (chat diretta/broadcast)
 */
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize,Serialize};
 
 // ---------------------------------------------------------------------
@@ -62,6 +63,44 @@ pub struct LoginResponse {
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
+}
+
+// ---------------------------------------------------------------------
+// WEBSOCKET: Messaggi Client -> Server
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum WsClientMessage {
+    Text {
+        text: String,
+        timestamp: DateTime<Utc>,
+    },
+    // Altri messaggi possono essere aggiunti qui
+}
+
+// ---------------------------------------------------------------------
+// WEBSOCKET: Messaggi Server -> Client
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum WsServerMessage {
+    BroadcastText {
+        id: i64,
+        text: String,
+        timestamp: DateTime<Utc>,
+    },
+    DirectText {
+        id: i64,
+        text: String,
+        timestamp: DateTime<Utc>,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
+    // Altri messaggi possono essere aggiunti qui
 }
 
 #[cfg(test)]
