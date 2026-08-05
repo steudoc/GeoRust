@@ -7,6 +7,8 @@ edition = "2024"
 common = { path = "../common" }
 
 axum = { version = "0.7", features = ["ws"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+headers = "0.4"
 tokio = { version = "1", features = ["full"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace"] }
@@ -20,6 +22,7 @@ sqlx = { version = "0.7", features = ["sqlite", "runtime-tokio", "chrono", "migr
 argon2 = "0.5"
 password-hash = { version = "0.5", features = ["rand_core"] }
 rand_core = { version = "0.6", features = ["std"] }
+rand = "0.8"
 
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }

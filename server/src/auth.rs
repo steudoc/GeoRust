@@ -89,6 +89,10 @@ pub async fn login(
     /*
     Nota: qui il token viene generato al volo e NON viene salvato. Per essere più rigorosi, si potrebbe tenere una HashMap<token, user_id> in AppState. Altrimenti va segnalato nel report come semplificazione */
     let token = Uuid::new_v4().to_string();
+    state.tokens
+        .lock()
+        .unwrap()
+        .insert(token.clone(), user_id);
 
     Ok(Json(LoginResponse { user_id, token }))
 }
