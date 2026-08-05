@@ -2,6 +2,8 @@ mod state;
 mod auth;
 
 use std::sync::Arc;
+use common::{WsClientMessage::{self, Text}, WsServerMessage};
+use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePoolOptions;
 
 use crate::state::AppState;
@@ -20,8 +22,7 @@ use headers::{Authorization, authorization::Bearer};
 use rand::Rng;
 use std::time::Duration;
 use tokio::time;
-use serde::{Deserialize, Serialize};
-
+use tokio::sync::mpsc;
 
 
 #[tokio::main]
@@ -55,13 +56,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-
+/*
 // Handler che intercetta la richiesta di upgrade a WebSocket
 #[derive(Deserialize)]
 struct WsQuery {
     token: String,
-}
-
+}*/
 
 async fn ws_handler(
     State(state): State<Arc<AppState>>,
@@ -80,14 +80,27 @@ async fn ws_handler(
         None => return (StatusCode::UNAUTHORIZED, "token non valido").into_response(),
     };
 
-    ws.on_upgrade(move |socket| do_server_side_socket_operations(socket, user_id))
+    ws.on_upgrade(move |socket| do_server_side_socket_operations(socket, user_id, state))
         .into_response()
 }
 
-
 // Gestisce la connessione una volta "promossa" a WebSocket
-async fn do_server_side_socket_operations(mut socket: WebSocket, user_id: i64) {
+async fn do_server_side_socket_operations(
+    socket: WebSocket, 
+    user_id: i64,
+    state: Arc<AppState>
+) {
     println!("Client connesso: user_id = {user_id}");
+
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Canale MPSC per i messaggi diretti a questo client
+    let (direct_tx, mut direct_rx) = mpsc::channel::<WsServerMessage>(100);
+    
+    state.register_client(user_id, direct_tx.clone()).await;
+
+    // Iscrizione al canale BROADCAST globale
+    let mut broadcast_rx = state.register_broadcast();
 
     let mut interval = time::interval(Duration::from_secs(20));
 
@@ -99,14 +112,14 @@ async fn do_server_side_socket_operations(mut socket: WebSocket, user_id: i64) {
                 let numero: u32 = rand::thread_rng().gen_range(0..1000);
                 let msg = format!("update:{numero}");
 
-                if socket.send(Message::Text(msg)).await.is_err() {
+                if ws_sender.send(Message::Text(msg)).await.is_err() {
                     println!("Client disconnesso, chiudo il loop");
                     break;
                 }
             }
 
             // intanto ascolta anche eventuali messaggi/chiusura dal client
-            incoming = socket.recv() => {
+            incoming = ws_receiver.next() => {
                 //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name. 
                 //In the future we will use this channel to receive messages from the client and make actions from the server accordingly.
                 match incoming {
@@ -115,9 +128,15 @@ async fn do_server_side_socket_operations(mut socket: WebSocket, user_id: i64) {
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
-                        println!("Ricevuto da user_id {user_id}: {text}");
+                        match serde_json::from_str::<WsClientMessage>(&text) {
+                            Ok(Text { text, timestamp }) => {
+                                println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
+                            },
+                            Err(e) => {
+                                println!("Errore nel parsing del messaggio: {e}");
+                            }
+                        }
                     }
-
                     Some(Ok(_)) => {
                         println!("Non text message received");
                     }
@@ -127,6 +146,35 @@ async fn do_server_side_socket_operations(mut socket: WebSocket, user_id: i64) {
                     }
                 }
             }
+
+            // Handle messaggi diretti
+            Some(msg) = direct_rx.recv() => {
+                let msg_json = serde_json::to_string(&msg).unwrap();
+                if ws_sender.send(Message::Text(msg_json)).await.is_err() {
+                    println!("Client disconnesso durante invio direct, chiudo il loop");
+                    break;
+                }
+            }
+
+            // Handle messaggi broadcast
+            msg = broadcast_rx.recv() => {
+                match msg {
+                    Ok(msg) => {
+                        let msg_json = serde_json::to_string(&msg).unwrap();
+                        if ws_sender.send(Message::Text(msg_json)).await.is_err() {
+                            println!("Client disconnesso durante invio broadcast, chiudo il loop");
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        println!("Errore nel ricevere broadcast: {e}");
+                        break;
+                    }
+                }
+            }
         }
     }
+
+    state.unregister_client(user_id).await;
+    println!("Client disconnesso: user_id = {user_id}");
 }
