@@ -1,5 +1,6 @@
 mod state;
 mod auth;
+mod console;
 
 use std::sync::Arc;
 use common::{WsClientMessage::{self, Text}, WsServerMessage};
@@ -7,6 +8,7 @@ use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePoolOptions;
 
 use crate::state::AppState;
+use crate::console::SimpleConsole;
 
 const DB_PATH: &str = "db.sqlite";
 
@@ -43,6 +45,8 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState::new(pool);
 
+    let console = SimpleConsole::new(Arc::clone(&state));
+
     let app = Router::new()
         .route("/register", post(auth::register))
         .route("/login", post( auth::login))
@@ -51,8 +55,24 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("Server running at http://0.0.0.0:3000");
-    axum::serve(listener, app).await?;
 
+    let console_handle = tokio::task::spawn_blocking(move || {
+        let handle = tokio::runtime::Handle::current();
+        if let Err(e) = handle.block_on(console.run()) {
+            tracing::error!("Console error: {e}");
+        }
+    });
+
+    tokio::select! {
+        result = axum::serve(listener, app) => {
+            result?;
+        }
+        _ = console_handle => {
+            tracing::info!("Console terminated");
+        }
+    }
+
+    tracing::info!("Server shutting down");
     Ok(())
 }
 
@@ -84,28 +104,34 @@ async fn ws_handler(
         .into_response()
 }
 
-// Gestisce la connessione una volta "promossa" a WebSocket
+/**
+ * Gestisce la connessione una volta "promossa" a WebSocket.
+ * Effettua il loop di ricezione dei messaggi dal client e l'invio di messaggi diretti e broadcast.
+ */
 async fn do_server_side_socket_operations(
     socket: WebSocket, 
     user_id: i64,
     state: Arc<AppState>
 ) {
-    println!("Client connesso: user_id = {user_id}");
+    tracing::info!("Client connesso: user_id = {user_id}");
 
+    // Split del socket
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Canale MPSC per i messaggi diretti a questo client
+    // Crezione del canale MPSC per i messaggi diretti
     let (direct_tx, mut direct_rx) = mpsc::channel::<WsServerMessage>(100);
     
+    // Registrazione del sender nello stato globale
     state.register_client(user_id, direct_tx.clone()).await;
 
     // Iscrizione al canale BROADCAST globale
     let mut broadcast_rx = state.register_broadcast();
 
-    let mut interval = time::interval(Duration::from_secs(20));
+    // let mut interval = time::interval(Duration::from_secs(20));
 
     loop {
         tokio::select! {
+            /*
             //TODO: here is the sending mechanism server-side
             // Current implementation: sending a random number every 20 seconds to the client. In the future we will use this channel to send messages to the client based on the state of the server.
             _ = interval.tick() => {
@@ -116,32 +142,29 @@ async fn do_server_side_socket_operations(
                     println!("Client disconnesso, chiudo il loop");
                     break;
                 }
-            }
+            }*/
 
-            // intanto ascolta anche eventuali messaggi/chiusura dal client
             incoming = ws_receiver.next() => {
-                //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name. 
-                //In the future we will use this channel to receive messages from the client and make actions from the server accordingly.
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => {
-                        println!("Connessione chiusa dal client");
+                        tracing::info!("Client disconnesso: user_id = {user_id}");
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text, timestamp }) => {
-                                println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
+                                println!("Messaggio ricevuto da user_id {user_id}: {text} (timestamp: {timestamp})");
                             },
                             Err(e) => {
-                                println!("Errore nel parsing del messaggio: {e}");
+                                tracing::error!("Errore nel parsing del messagio: {e}");
                             }
                         }
                     }
                     Some(Ok(_)) => {
-                        println!("Non text message received");
+                        tracing::warn!("Non text message received from user_id {user_id}");
                     }
                     Some(Err(e)) => {
-                        println!("Errore sul socket: {e}");
+                        tracing::error!("Errore sul socket per user_id {user_id}: {e}");
                         break;
                     }
                 }
@@ -151,7 +174,7 @@ async fn do_server_side_socket_operations(
             Some(msg) = direct_rx.recv() => {
                 let msg_json = serde_json::to_string(&msg).unwrap();
                 if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                    println!("Client disconnesso durante invio direct, chiudo il loop");
+                    tracing::info!("Client {user_id} disconnesso durante l'invio messaggio");
                     break;
                 }
             }
@@ -162,12 +185,12 @@ async fn do_server_side_socket_operations(
                     Ok(msg) => {
                         let msg_json = serde_json::to_string(&msg).unwrap();
                         if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                            println!("Client disconnesso durante invio broadcast, chiudo il loop");
+                            tracing::info!("Client {user_id} disconnesso durante l'invio messaggio");
                             break;
                         }
                     }
                     Err(e) => {
-                        println!("Errore nel ricevere broadcast: {e}");
+                        tracing::error!("Errore nel ricevere messaggio broadcast per user_id {user_id}: {e}");
                         break;
                     }
                 }
