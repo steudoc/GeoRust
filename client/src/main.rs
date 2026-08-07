@@ -1,17 +1,21 @@
 use std::io::{self, Write};
 
-use common::{LoginRequest, LoginResponse, RegisterRequest};
+use chrono::Utc;
+
+use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage};
 use futures_util::{
     stream::{SplitSink, SplitStream},
     Sink, SinkExt, Stream, StreamExt,
 };
-use rand::Rng;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{client::IntoClientRequest, Message},
     MaybeTlsStream, WebSocketStream,
 };
+
+use common::WsServerMessage::{self, BroadcastText, DirectText, Error};
 
 const SERVER_HTTP: &str = "http://127.0.0.1:3000";
 const SERVER_WS: &str = "ws://127.0.0.1:3000/ws";
@@ -138,17 +142,33 @@ where
     S::Error: std::error::Error + Send + Sync + 'static,
     R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
-    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
-    // Skip the immediate first tick if you don't want a send right at connection time:
-    // ticker.tick().await;
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     loop {
+        println!("Simple Console - Type 'help' for commands");
+        print!("> ");
+        io::stdout().flush()?;
+
         tokio::select! {
             // Branch 1: incoming messages from server
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        println!("Aggiornamento ricevuto: {text}");
+                        // println!("Aggiornamento ricevuto: {text}");
+                        match serde_json::from_str::<WsServerMessage>(&text) {
+                            Ok(DirectText { id, text, timestamp }) => {
+                                println!("Messaggio diretto ricevuto: {text} (id: {id}, timestamp: {timestamp})");
+                            },
+                            Ok(BroadcastText { id, text, timestamp }) => {
+                                println!("Messaggio broadcast ricevuto: {text} (id: {id}, timestamp: {timestamp})");
+                            },
+                            Ok(Error { code, message }) => {
+                                println!("Errore ricevuto: {code} - {message}");
+                            },
+                            Err(e) => {
+                                println!("Errore nel parsing del messaggio: {e}");
+                            }
+                        }
                     }
                     Some(Ok(Message::Close(_))) => {
                         println!("Server ha chiuso la connessione");
@@ -165,15 +185,49 @@ where
                     }
                 }
             }
-            
-            //TODO: edit here to send
-            // Current implementation for try: send a random number every 10 seconds
-            _ = ticker.tick() => {
-                let random_number: u32 = rand::thread_rng().gen_range(0..1000);
-                let payload = random_number.to_string();
-                write.send(Message::Text(payload.clone())).await?;
-                println!("Inviato numero casuale: {payload}");
+
+            line = lines.next_line() => {
+                let Some(line) = line? else {
+                    println!("Input chiuso");
+                    break;
+                };
+
+                let mut parts = line.trim().splitn(2, char::is_whitespace);
+                let command = parts.next().unwrap_or("");
+                let argument = parts.next().unwrap_or("").trim();
+
+                match command {
+                    "help" => {
+                        println!("Available commands:");
+                        println!("help - Show this help message");
+                        println!("msg <message> - Send a message to the server");
+                        println!("exit - Exit the console");
+                    }
+                    "msg" => {
+                        if argument.is_empty() {
+                            println!("Usage: msg <message>");
+                            continue;
+                        }
+
+                        let payload = serde_json::to_string(&WsClientMessage::Text {
+                            text: argument.to_string(),
+                            timestamp: Utc::now(),
+                        })?;
+
+                        write.send(Message::Text(payload.into())).await?;
+                        println!("Messaggio inviato");
+                    }
+                    "exit" => {
+                        println!("Exiting console...");
+                        break;
+                    }
+                    "" => {}
+                    _ => {
+                        println!("Unknown command: {command}");
+                    }
+                }
             }
+            
         }
     }
 
