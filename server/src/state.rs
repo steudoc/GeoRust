@@ -41,4 +41,25 @@ impl AppState {
         let mut clients = self.clients.write().await;
         clients.remove(&user_id);
     }
+
+    pub async fn send_direct_message(&self, user_id: &UserId, message: String) -> Result<(), String> {
+        let clients = self.clients.read().await;
+        if let Some(tx) = clients.get(&user_id) {
+            let msg = WsServerMessage::DirectText { id: 0, text: message, timestamp: chrono::Utc::now() };
+            match tx.send(msg).await {
+                Ok(_) => Ok(()),
+                Err(e) => Err(format!("Errore nell'invio del messaggio: {e}")),
+            }
+        } else {
+            Err("Utente {user_id} non connesso".to_string())
+        }
+    }
+
+    pub fn send_broadcast_message(&self, message: String) -> Result<(), String> {
+        let msg = WsServerMessage::BroadcastText { id: 0, text: message, timestamp: chrono::Utc::now() };
+        match self.broadcast_tx.send(msg) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Errore nell'invio del messaggio broadcast: {e}")),
+        }
+    }
 }
