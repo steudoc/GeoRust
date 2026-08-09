@@ -2,3 +2,4 @@
 *.sqlite3
 *.sqlite3-journal
 .env
+cpu_usage_log.txt

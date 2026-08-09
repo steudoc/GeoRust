@@ -1,6 +1,7 @@
 mod state;
 mod auth;
 mod stats;
+mod info;
 
 use std::sync::Arc;
 use common::{WsClientMessage::{self, Text}, WsServerMessage};
@@ -54,7 +55,10 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("Server running at http://0.0.0.0:3000");
 
+    // Lancia il logger della CPU in background
+    tokio::spawn(info::start_cpu_logger());
     
+    // setup della CLI di amministrazione
     let db_for_admin = pool;
     tokio::spawn(async move {
         let stdin = io::stdin();
