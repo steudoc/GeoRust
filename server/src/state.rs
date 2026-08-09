@@ -1,8 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-
+use std::sync::{Arc, Mutex};
 use sqlx::SqlitePool;
-use std::sync::Mutex;
+use tokio::sync::{mpsc, broadcast, RwLock};
+
+use common::WsServerMessage;
+
+type UserId = i64;
 
 /*
 Stato condiviso tra tutti gli handler axum.
@@ -10,15 +13,32 @@ Arc<AppState> viene clonato e passato ad ogni handler tramite axum::extract::Sta
 */
 pub struct AppState {
     pub db: SqlitePool,
-    pub tokens: Mutex<HashMap<String, i64>>, // token -> user_id
+    pub tokens: Mutex<HashMap<String, UserId>>, // token -> user_id
+    pub clients: RwLock<HashMap<UserId, mpsc::Sender<WsServerMessage>>>, // canali diretti
+    pub broadcast_tx: broadcast::Sender<WsServerMessage>, // canale broadcast
 }
 impl AppState {
     pub fn new(db: SqlitePool) -> Arc<Self> {
+        let (broadcast_tx, _) = broadcast::channel(100); // buffer size 100
         Arc::new(Self {
             db,
             tokens: Mutex::new(HashMap::new()),
+            clients: RwLock::new(HashMap::new()),
+            broadcast_tx,
         })
     }
 
+    pub async fn register_client(&self, user_id: UserId, tx: mpsc::Sender<WsServerMessage>) {
+        let mut clients = self.clients.write().await;
+        clients.insert(user_id, tx);
+    }
 
+    pub fn register_broadcast(&self) -> broadcast::Receiver<WsServerMessage> {
+        self.broadcast_tx.subscribe()
+    }
+
+    pub async fn unregister_client(&self, user_id: UserId) {
+        let mut clients = self.clients.write().await;
+        clients.remove(&user_id);
+    }
 }
