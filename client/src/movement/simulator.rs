@@ -41,8 +41,7 @@ impl RouteSimulator {
         let mut emitted_points = 0;
 
         for point in self.route {
-            // Attendiamo la differenza rispetto al punto precedente, non il
-            // tempo assoluto del punto dall'inizio del percorso.
+            // Attendiamo la differenza rispetto al punto precedente (30 secondi)
             let route_delay = point.elapsed.saturating_sub(previous_elapsed);
 
             let real_delay = route_delay / self.speed_factor;

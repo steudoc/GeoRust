@@ -1,5 +1,6 @@
 mod state;
 mod auth;
+mod trip;
 
 use std::sync::Arc;
 use common::{WsClientMessage::{self, Text}, WsServerMessage};
