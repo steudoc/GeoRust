@@ -1,3 +1,4 @@
+#[cfg_attr(not(test), allow(dead_code, unused_imports))]
 mod movement;
 
 use std::io::{self, Write};

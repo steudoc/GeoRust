@@ -1,5 +1,6 @@
 mod state;
 mod auth;
+#[cfg_attr(not(test), allow(dead_code))]
 mod trip;
 
 use std::sync::Arc;
