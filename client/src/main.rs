@@ -1,3 +1,5 @@
+mod movement;
+
 use std::io::{self, Write};
 
 use common::{LoginRequest, LoginResponse, RegisterRequest};

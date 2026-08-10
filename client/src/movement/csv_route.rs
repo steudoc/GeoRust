@@ -1,13 +1,8 @@
-use std::{
-    fs::File,
-    io::Read,
-    path::Path,
-    time::Duration,
-};
-use anyhow::{bail, Context, Result};
-use serde::Deserialize;
-use common::tracking::Coordinates;
 use super::RoutePoint;
+use anyhow::{Context, Result, bail};
+use common::tracking::Coordinates;
+use serde::Deserialize;
+use std::{fs::File, io::Read, path::Path, time::Duration};
 
 /// Corrisponde direttamente alle colonne nel CSV:
 /// time, latitude, longitude
@@ -31,29 +26,43 @@ pub fn load_route(path: impl AsRef<Path>) -> Result<Vec<RoutePoint>> {
         .with_context(|| format!("percorso non valido nel file {}", path.display()))
 }
 
-
 /// Legge e valida un tragitto da un file CSV
 fn load_route_from_reader<R: Read>(reader: R) -> Result<Vec<RoutePoint>> {
-    let mut csv_reader = csv::ReaderBuilder::new().trim(csv::Trim::All).from_reader(reader);
+    let mut csv_reader = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(reader);
 
     let mut route: Vec<RoutePoint> = Vec::new();
 
     for (row_index, result) in csv_reader.deserialize::<CsvRecord>().enumerate() {
         // Prima riga contiene intestazione, si inizia dalla seconda
-        let line = row_index+2;
+        let line = row_index + 2;
 
         let record = result.with_context(|| format!("Riga {line}: formato CSV non valido"))?;
 
-        let elapsed = parse_elapsed_time(&record.time).with_context(|| format!("Riga {line}: tempo non valido"))?;
+        let elapsed = parse_elapsed_time(&record.time)
+            .with_context(|| format!("Riga {line}: tempo non valido"))?;
 
-        let coordinates = Coordinates::new(record.latitude, record.longitude)
-        .with_context(|| format!("Riga {line}: coordinates non valide ({}, {})", record.latitude, record.longitude))?;
+        let coordinates =
+            Coordinates::new(record.latitude, record.longitude).with_context(|| {
+                format!(
+                    "Riga {line}: coordinates non valide ({}, {})",
+                    record.latitude, record.longitude
+                )
+            })?;
 
-        if let Some(previous) = route.last() && elapsed <= previous.elapsed {
-            bail!("Riga {line}: il tempo deve essere successivo al tempo del punto precedente (tempo deve essere crescente)");
+        if let Some(previous) = route.last()
+            && elapsed <= previous.elapsed
+        {
+            bail!(
+                "Riga {line}: il tempo deve essere successivo al tempo del punto precedente (tempo deve essere crescente)"
+            );
         }
 
-        route.push(RoutePoint{ elapsed, coordinates });
+        route.push(RoutePoint {
+            elapsed,
+            coordinates,
+        });
     }
 
     if route.is_empty() {
@@ -65,14 +74,20 @@ fn load_route_from_reader<R: Read>(reader: R) -> Result<Vec<RoutePoint>> {
 
 /// Converte la stringa nel file CSV dal fomato 'MM:SS' in Duration
 fn parse_elapsed_time(time: &str) -> Result<Duration> {
-    let (minutes_text, seconds_text) = time.split_once(':').with_context(|| format!("Formato atteso MM:SS, ricevuto {time:?}"))?;
+    let (minutes_text, seconds_text) = time
+        .split_once(':')
+        .with_context(|| format!("Formato atteso MM:SS, ricevuto {time:?}"))?;
 
     if minutes_text.is_empty() || seconds_text.len() != 2 || seconds_text.contains(':') {
         bail!("Formato atteso MM:SS, ricevuto {time:?}");
     }
 
-    let minutes: u64 = minutes_text.parse().with_context(|| format!("Minnuti non validi in {time:?}"))?;
-    let seconds: u64 = seconds_text.parse().with_context(|| format!("Secondi non validi in {time:?}"))?;
+    let minutes: u64 = minutes_text
+        .parse()
+        .with_context(|| format!("Minnuti non validi in {time:?}"))?;
+    let seconds: u64 = seconds_text
+        .parse()
+        .with_context(|| format!("Secondi non validi in {time:?}"))?;
 
     if seconds >= 60 {
         bail!("I secondi devono essere compresi tra 00 e 59");
@@ -87,8 +102,10 @@ fn parse_elapsed_time(time: &str) -> Result<Duration> {
     Ok(Duration::from_secs(total_seconds))
 }
 
+// ---------------------------------------------------------------------
+// TEST
+// ---------------------------------------------------------------------
 
-// Test strutturali
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -102,8 +119,8 @@ time,latitude,longitude
 01:00,45.0531939,7.6630137
 ";
 
-        let route = load_route_from_reader(csv.as_bytes())
-            .expect("il percorso dovrebbe essere valido");
+        let route =
+            load_route_from_reader(csv.as_bytes()).expect("il percorso dovrebbe essere valido");
 
         assert_eq!(route.len(), 3);
         assert_eq!(route[0].elapsed, Duration::from_secs(0));
@@ -189,11 +206,9 @@ time,latitude,longitude
 
     #[test]
     fn loads_torino_asti_file() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../data/Torino-Asti.csv");
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../data/Torino-Asti.csv");
 
-        let route = load_route(path)
-            .expect("Torino-Asti.csv dovrebbe essere valido");
+        let route = load_route(path).expect("Torino-Asti.csv dovrebbe essere valido");
 
         assert_eq!(route.len(), 96);
         assert_eq!(route.first().unwrap().elapsed, Duration::from_secs(0));
