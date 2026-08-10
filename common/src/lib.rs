@@ -10,6 +10,8 @@ Contiene le strutture dati condivise tra client e server:
 use chrono::{DateTime, Utc};
 use serde::{Deserialize,Serialize};
 
+pub mod tracking;
+
 // ---------------------------------------------------------------------
 // STATO UTENTE
 // ---------------------------------------------------------------------
