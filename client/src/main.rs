@@ -112,7 +112,9 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Login: OK, user_id = {}", login_resp.user_id);
 
-    let default_csv_path = Path::new("G8/data/Torino-Asti.csv");
+    let default_csv_path =
+        Path::new(env!("CARGO_MANIFEST_DIR"))   // Seleziono la cartella che continene il Cargo.toml di client, così da avere un punto di partenza fisso per il path
+            .join("../data/Torino-Asti.csv");
     let csv_path = read_csv_path(&default_csv_path)?;
     let speed_factor = read_speed_factor()?;
     let route = movement::load_route(&csv_path)?;
