@@ -4,6 +4,7 @@ mod auth;
 mod trip;
 
 use std::sync::Arc;
+use chrono::Utc;
 use common::{WsClientMessage::{self, Text}, WsServerMessage};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePoolOptions;
@@ -21,11 +22,7 @@ use axum::{
 };
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
-use rand::Rng;
-use std::time::Duration;
-use tokio::time;
 use tokio::sync::mpsc;
-
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -98,28 +95,18 @@ async fn do_server_side_socket_operations(
 
     // Canale MPSC per i messaggi diretti a questo client
     let (direct_tx, mut direct_rx) = mpsc::channel::<WsServerMessage>(100);
-    
+
     state.register_client(user_id, direct_tx.clone()).await;
+
+    state.start_trip(user_id).await;
 
     // Iscrizione al canale BROADCAST globale
     let mut broadcast_rx = state.register_broadcast();
 
-    let mut interval = time::interval(Duration::from_secs(20));
+    let mut trip_finished = false;
 
     loop {
         tokio::select! {
-            //TODO: here is the sending mechanism server-side
-            // Current implementation: sending a random number every 20 seconds to the client. In the future we will use this channel to send messages to the client based on the state of the server.
-            _ = interval.tick() => {
-                let numero: u32 = rand::thread_rng().gen_range(0..1000);
-                let msg = format!("update:{numero}");
-
-                if ws_sender.send(Message::Text(msg)).await.is_err() {
-                    println!("Client disconnesso, chiudo il loop");
-                    break;
-                }
-            }
-
             // intanto ascolta anche eventuali messaggi/chiusura dal client
             incoming = ws_receiver.next() => {
                 //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name. 
@@ -134,6 +121,60 @@ async fn do_server_side_socket_operations(
                             Ok(Text { text, timestamp }) => {
                                 println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
                             },
+                            Ok(WsClientMessage::PositionUpdate { coordinata }) => {
+                                let response = match state.record_position(user_id, coordinata, Utc::now()).await {
+                                    Some(Ok((user_state, points_received))) => {
+                                        WsServerMessage::PositionAccepted {
+                                            stato: user_state,
+                                            coord_ricevute: points_received,
+                                        }
+                                    }
+                                    Some(Err(error)) => WsServerMessage::Error {
+                                        code: "invalid_position_time".to_string(),
+                                        message: error.to_string(),
+                                    },
+                                    None => WsServerMessage::Error {
+                                        code: "trip_not_found".to_string(),
+                                        message: "Nessun tragitto attivo per l'utente".to_string(),
+                                    },
+                                };
+
+                                if !send_server_message(&mut ws_sender, &response).await {
+                                    println!("Errore durante l'invio della risposta al client");
+                                    break;
+                                }
+                            }
+                            Ok(WsClientMessage::TripCompleted) => {
+                                let response = match state.finish_trip(user_id).await {
+                                    Some(summary) => {
+                                        trip_finished = true;
+                                        println!(
+                                            "Tragitto completato per user_id {user_id}: {} punti, movimento {}s, fermo {}s",
+                                            summary.points_received,
+                                            summary.moving_seconds,
+                                            summary.stopped_seconds
+                                        );
+                                        WsServerMessage::TripCompleted {
+                                            numero_coord: summary.points_received,
+                                            tempo_movimento: summary.moving_seconds,
+                                            tempo_fermo: summary.stopped_seconds,
+                                        }
+                                    }
+                                    None => WsServerMessage::Error {
+                                        code: "trip_not_found".to_string(),
+                                        message: "Nessun tragitto attivo per l'utente".to_string(),
+                                    },
+                                };
+
+                                if !send_server_message(&mut ws_sender, &response).await {
+                                    println!("Errore durante l'invio della risposta al client");
+                                    break;
+                                }
+
+                                if trip_finished {
+                                    break;
+                                }
+                            }
                             Err(e) => {
                                 println!("Errore nel parsing del messaggio: {e}");
                             }
@@ -177,6 +218,30 @@ async fn do_server_side_socket_operations(
         }
     }
 
+    if !trip_finished {
+        if let Some(summary) = state.finish_trip(user_id).await {
+            println!(
+                "Riepilogo user_id {user_id}: {} punti, {}s in movimento, {}s fermo",
+                summary.points_received, summary.moving_seconds, summary.stopped_seconds
+            );
+        }
+    }
+
     state.unregister_client(user_id).await;
     println!("Client disconnesso: user_id = {user_id}");
+}
+
+async fn send_server_message<S>(sender: &mut S, message: &WsServerMessage) -> bool
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let json = match serde_json::to_string(message) {
+        Ok(json) => json,
+        Err(error) => {
+            println!("Errore durante la serializzazione della risposta: {error}");
+            return false;
+        }
+    };
+
+    sender.send(Message::Text(json)).await.is_ok()
 }
