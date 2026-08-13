@@ -2,11 +2,11 @@
 mod trip;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
-use common::tracking::Coordinates;
+use common::tracking::Coordinata;
 use trip::Trip;
 
-fn coordinates(latitude: f64, longitude: f64) -> Coordinates {
-    Coordinates::new(latitude, longitude).expect("coordinate dell'esempio valide")
+fn coordinates(latitude: f64, longitude: f64) -> Coordinata {
+    Coordinata::new(latitude, longitude).expect("coordinate dell'esempio valide")
 }
 
 fn main() -> anyhow::Result<()> {
@@ -34,8 +34,8 @@ fn main() -> anyhow::Result<()> {
 
         println!(
             "t={elapsed_seconds:>3}s  lat={:.4}  lon={:.4}  stato={state:?}  movimento={}s  fermo={}s",
-            coordinates.get_latitude(),
-            coordinates.get_longitude(),
+            coordinates.get_latitudine(),
+            coordinates.get_longitudine(),
             trip.get_moving_seconds(),
             trip.get_stopped_seconds()
         );

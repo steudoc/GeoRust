@@ -26,8 +26,8 @@ async fn main() -> anyhow::Result<()> {
         println!(
             "t={:>4}s  lat={:.7}  lon={:.7}",
             point.elapsed.as_secs(),
-            point.coordinates.get_latitude(),
-            point.coordinates.get_longitude()
+            point.coordinates.get_latitudine(),
+            point.coordinates.get_longitudine()
         );
     }
 

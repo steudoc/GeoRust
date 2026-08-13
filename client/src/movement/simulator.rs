@@ -75,12 +75,12 @@ impl RouteSimulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::tracking::Coordinates;
+    use common::tracking::Coordinata;
 
     fn route_point(elapsed_seconds: u64, latitude: f64) -> RoutePoint {
         RoutePoint {
             elapsed: Duration::from_secs(elapsed_seconds),
-            coordinates: Coordinates::new(latitude, 7.0)
+            coordinates: Coordinata::new(latitude, 7.0)
                 .expect("le coordinate del test devono essere valide"),
         }
     }
@@ -120,7 +120,7 @@ mod tests {
             .try_recv()
             .expect("il primo punto deve essere emesso immediatamente");
         assert_eq!(first.elapsed, Duration::ZERO);
-        assert_eq!(first.coordinates.get_latitude(), 45.0);
+        assert_eq!(first.coordinates.get_latitudine(), 45.0);
 
         tokio::time::advance(Duration::from_secs(29)).await;
         tokio::task::yield_now().await;
@@ -132,7 +132,7 @@ mod tests {
             .try_recv()
             .expect("il secondo punto deve arrivare dopo 30 secondi");
         assert_eq!(second.elapsed, Duration::from_secs(30));
-        assert_eq!(second.coordinates.get_latitude(), 45.1);
+        assert_eq!(second.coordinates.get_latitudine(), 45.1);
 
         tokio::time::advance(Duration::from_secs(30)).await;
         tokio::task::yield_now().await;
@@ -140,7 +140,7 @@ mod tests {
             .try_recv()
             .expect("il terzo punto deve arrivare dopo altri 30 secondi");
         assert_eq!(third.elapsed, Duration::from_secs(60));
-        assert_eq!(third.coordinates.get_latitude(), 45.2);
+        assert_eq!(third.coordinates.get_latitudine(), 45.2);
 
         let emitted_points = simulator_task
             .await

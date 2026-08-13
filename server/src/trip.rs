@@ -1,13 +1,13 @@
 use std::{error::Error, fmt, time::Duration};
 use chrono::{DateTime, Utc};
-use common::{UserState, tracking::Coordinates};
+use common::{UserState, tracking::Coordinata};
 
 const STILL_THRESHOLD: Duration = Duration::from_secs(3 * 60);  // 3 minuti soglia per passare da in movimento a fermo
 
 /// Posizione del tragitto associata al tempo in cui il server l'ha ricevuta
 #[derive(Debug, Clone, PartialEq)]
 pub struct PositionSample {
-    pub coordinates: Coordinates,
+    pub coordinates: Coordinata,
     pub received_at: DateTime<Utc>,
 }
 
@@ -82,7 +82,7 @@ impl Trip {
     /// Registra una posizione e restituisce il nuovo stato dell'utente
     pub fn record_position(
         &mut self,
-        coordinates: Coordinates,
+        coordinates: Coordinata,
         received_at: DateTime<Utc>,
     ) -> Result<UserState, TripError> {
 
@@ -173,8 +173,8 @@ mod tests {
 
     use super::*;
 
-    fn coordinates(latitude: f64) -> Coordinates {
-        Coordinates::new(latitude, 7.0).expect("coordinate del test valide")
+    fn coordinates(latitude: f64) -> Coordinata {
+        Coordinata::new(latitude, 7.0).expect("coordinate del test valide")
     }
 
     fn timestamp(seconds: i64) -> DateTime<Utc> {

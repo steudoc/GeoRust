@@ -1,6 +1,6 @@
 use super::RoutePoint;
 use anyhow::{Context, Result, bail};
-use common::tracking::Coordinates;
+use common::tracking::Coordinata;
 use serde::Deserialize;
 use std::{fs::File, io::Read, path::Path, time::Duration};
 
@@ -17,7 +17,7 @@ struct CsvRecord {
 ///
 /// È separata da `load_route` per poterla testare usando stringhe e file temporanei
 pub fn load_route(path: impl AsRef<Path>) -> Result<Vec<RoutePoint>> {
-    let path = path.as_ref();
+    let path = path.as_ref();   // Cast a &Path
 
     let file = File::open(path)
         .with_context(|| format!("impossibile aprire il file {}", path.display()))?;
@@ -44,7 +44,7 @@ fn load_route_from_reader<R: Read>(reader: R) -> Result<Vec<RoutePoint>> {
             .with_context(|| format!("Riga {line}: tempo non valido"))?;
 
         let coordinates =
-            Coordinates::new(record.latitude, record.longitude).with_context(|| {
+            Coordinata::new(record.latitude, record.longitude).with_context(|| {
                 format!(
                     "Riga {line}: coordinates non valide ({}, {})",
                     record.latitude, record.longitude
@@ -127,8 +127,8 @@ time,latitude,longitude
         assert_eq!(route[1].elapsed, Duration::from_secs(30));
         assert_eq!(route[2].elapsed, Duration::from_secs(60));
 
-        assert_eq!(route[0].coordinates.get_latitude(), 45.0618513);
-        assert_eq!(route[0].coordinates.get_longitude(), 7.6606506);
+        assert_eq!(route[0].coordinates.get_latitudine(), 45.0618513);
+        assert_eq!(route[0].coordinates.get_longitudine(), 7.6606506);
     }
 
     #[test]
