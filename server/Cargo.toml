@@ -30,5 +30,6 @@ sysinfo = "=0.31.4"
 
 tracing = "0.1"
 tracing-subscriber = "0.3"
+tracing-appender = "0.2"
 
 anyhow = "1"

@@ -5,14 +5,12 @@ use tokio::io::AsyncWriteExt;
 use tokio::time::{self, Duration};
 
 const LOG_INTERVAL_SECS: u64 = 120;
-const LOG_FILENAME: &str = "cpu_usage_log.txt";
+const LOG_FILENAME: &str = "logs/cpu_usage_log.txt";
 
 pub async fn start_cpu_logger() {
     let mut sys = System::new_all();
     let pid = sysinfo::get_current_pid().expect("Impossible to retrieve PID");
     let mut interval = time::interval(Duration::from_secs(LOG_INTERVAL_SECS));
-
-    println!("Started CPU logging. Log file: {LOG_FILENAME}");
 
     loop {
         interval.tick().await;

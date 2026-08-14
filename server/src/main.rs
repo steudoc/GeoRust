@@ -27,11 +27,20 @@ use std::time::Duration;
 use tokio::time;
 use tokio::sync::mpsc;
 use tokio::io::{self, AsyncBufReadExt, BufReader};
+use tracing_appender::rolling;
+use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // crea un file di log giornaliero per gli eventi del server
+    let file_appender = rolling::daily("./logs", "websocket.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
 
     let db_url = format!("sqlite://{DB_PATH}?mode=rw"); // mode read/write
     let pool = SqlitePoolOptions::new()
@@ -59,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     // Lancia il logger della CPU in background
     tokio::spawn(info::start_cpu_logger());
     
-    // setup della CLI di amministrazione
+    // setup della CLI amministratore
     tokio::spawn(admin::start_admin_console(pool.clone()));
 
     axum::serve(listener, app).await?;
@@ -101,7 +110,7 @@ async fn do_server_side_socket_operations(
     user_id: i64,
     state: Arc<AppState>
 ) {
-    println!("Client connesso: user_id = {user_id}");
+    tracing::info!("Client connesso: user_id = {user_id}");
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
@@ -124,7 +133,7 @@ async fn do_server_side_socket_operations(
                 let msg = format!("update:{numero}");
 
                 if ws_sender.send(Message::Text(msg)).await.is_err() {
-                    println!("Client disconnesso, chiudo il loop");
+                    tracing::warn!("Client disconnesso, chiudo il loop");
                     break;
                 }
             }
@@ -135,24 +144,24 @@ async fn do_server_side_socket_operations(
                 //In the future we will use this channel to receive messages from the client and make actions from the server accordingly.
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => {
-                        println!("Connessione chiusa dal client");
+                        tracing::info!("Connessione chiusa dal client");
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text, timestamp }) => {
-                                println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
+                                tracing::info!("Messaggio ricevuto da user_id {}: {} alle {}", user_id, text, timestamp);
                             },
                             Err(e) => {
-                                println!("Errore nel parsing del messaggio: {e}");
+                                tracing::error!("Errore nel parsing: {}", e);
                             }
                         }
                     }
                     Some(Ok(_)) => {
-                        println!("Non text message received");
+                        tracing::debug!("Non text message received");
                     }
                     Some(Err(e)) => {
-                        println!("Errore sul socket: {e}");
+                        tracing::error!("Errore sul socket: {e}");
                         break;
                     }
                 }
@@ -173,12 +182,12 @@ async fn do_server_side_socket_operations(
                     Ok(msg) => {
                         let msg_json = serde_json::to_string(&msg).unwrap();
                         if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                            println!("Client disconnesso durante invio broadcast, chiudo il loop");
+                            tracing::warn!("Client disconnesso durante invio direct/broadcast, chiudo il loop");
                             break;
                         }
                     }
                     Err(e) => {
-                        println!("Errore nel ricevere broadcast: {e}");
+                        tracing::error!("Errore nel ricevere broadcast: {e}");
                         break;
                     }
                 }
@@ -187,5 +196,5 @@ async fn do_server_side_socket_operations(
     }
 
     state.unregister_client(user_id).await;
-    println!("Client disconnesso: user_id = {user_id}");
+    tracing::info!("Client disconnesso: user_id = {user_id}");
 }
