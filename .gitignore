@@ -1,6 +1,9 @@
+.idea/
+.vscode/
 /target/
 *.sqlite3
 *.sqlite3-journal
 .env
+todo.md
 cpu_usage_log.txt
 *.log.*

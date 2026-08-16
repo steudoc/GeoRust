@@ -5,10 +5,16 @@ Contiene le strutture dati condivise tra client e server:
  - DTO per endpoint REST
  - Enum dello stato utente
  - Messaggi (chat diretta/broadcast)
+ - Messaggi WebSocket
 */
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize,Serialize};
+use serde::{Deserialize, Serialize};
+
+pub mod tracking;
+
+/// Intervallo di tempo tra due posizioni
+pub const POSITION_INTERVAL_SECONDS: u64 = 30;
 
 // ---------------------------------------------------------------------
 // STATO UTENTE
@@ -20,18 +26,13 @@ Stato di un utente della flotta, secondo le specifiche del progetto:
  - "Moving": le coordinate sono cambiate rispetto all'ultimo invio
  - "Still": le coordinate non cambiano da almeno 3 minuti
 */
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)] // Deriviamo tratto Default
 #[serde(rename_all = "snake_case")]
 pub enum UserState {
+    #[default] // specifichiamo che Disconnected è il valore di default
     Disconnected,
     Moving,
     Still,
-}
-
-impl Default for UserState {
-    fn default() -> Self {
-        UserState::Disconnected
-    }
 }
 
 
@@ -60,7 +61,7 @@ pub struct LoginRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoginResponse {
     pub user_id: i64,
-    pub token: String,  // token facile da usare nelle req successive
+    pub token: String, // token facile da usare nelle req successive
 }
 
 
@@ -84,21 +85,29 @@ pub struct MovementStats {
 // WEBSOCKET: Messaggi Client -> Server
 // ---------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] // Aggiunto PartialEq cosi' da poter confrontare i messaggi nei test
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WsClientMessage {
     Text {
         text: String,
         timestamp: DateTime<Utc>,
     },
-    // Altri messaggi possono essere aggiunti qui
+    PositionUpdate {
+        coordinata: tracking::Coordinata,
+        elapsed_seconds: u64,
+    },
+    TripCompleted, /*
+                   Comunicare al server che il viaggio è completo
+                   Invece che considerare la chiusura della WebSocket come fine del tragitto inviamo un messaggio esplicito, poiché
+                   la chiusura della websocket potrebbe causarsi anche per altre ragioni, es. errore di rete, crash dell'applicativo, interruzioni improvvise del server o client
+                    */
 }
 
 // ---------------------------------------------------------------------
 // WEBSOCKET: Messaggi Server -> Client
 // ---------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WsServerMessage {
     BroadcastText {
@@ -116,14 +125,46 @@ pub enum WsServerMessage {
         message: String,
     },
     // Altri messaggi possono essere aggiunti qui
+    PositionAccepted {
+        // Conferma acquisizione di una posizione
+        stato: UserState,
+        coord_ricevute: usize,
+    },
+    TripCompleted {
+        // Riepilogo del viaggio
+        numero_coord: usize,
+        tempo_movimento: u64,
+        tempo_fermo: u64,
+    },
 }
 
 #[cfg(test)]
 mod tests {
-    //use super::*;
+    use super::*;
 
     #[test]
-    fn it_works() {
-        assert!(true);
+    fn position_update_round_trip_preserves_coordinates() {
+        let message = WsClientMessage::PositionUpdate {
+            coordinata: tracking::Coordinata::new(45.0, 7.0).unwrap(),
+            elapsed_seconds: 30,
+        };
+
+        let json = serde_json::to_string(&message).unwrap();
+        let decoded: WsClientMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn position_update_rejects_invalid_coordinates() {
+        let json = r#"{
+            "type": "position_update",
+            "payload": {
+                "coordinata": { "latitudine": 100.0, "longitudine": 7.0 },
+                "elapsed_seconds": 0
+            }
+        }"#;
+
+        assert!(serde_json::from_str::<WsClientMessage>(json).is_err());
     }
 }

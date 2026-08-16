@@ -21,13 +21,15 @@ pub async fn start_cpu_logger() {
             let run_time_sec = process.run_time();
 
             let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            let log_message = format!("[{timestamp}] PID: {pid} | CPU Usage: {cpu_usage_percent:.2}% | Uptime process: {run_time_sec}s\n" );
+            let log_message = format!(
+                "[{timestamp}] PID: {pid} | CPU Usage: {cpu_usage_percent:.2}% | Uptime process: {run_time_sec}s\n"
+            );
 
             match OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(LOG_FILENAME)
-                .await 
+                .await
             {
                 Ok(mut file) => {
                     if let Err(e) = file.write_all(log_message.as_bytes()).await {
