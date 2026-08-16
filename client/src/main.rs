@@ -1,17 +1,17 @@
 mod movement;
 
-use std::{
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
 use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage, WsServerMessage};
 use futures_util::{
     Sink, SinkExt, Stream, StreamExt,
     stream::{SplitSink, SplitStream},
 };
 use movement::RouteSimulator;
+use std::{
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;  // Canale usato per mettere in comunicazione il simulatore RouteSimulator e la websocket
+use tokio::sync::mpsc; // Canale usato per mettere in comunicazione il simulatore RouteSimulator e la websocket
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{Message, client::IntoClientRequest},
@@ -19,9 +19,6 @@ use tokio_tungstenite::{
 
 const SERVER_HTTP: &str = "http://127.0.0.1:3000";
 const SERVER_WS: &str = "ws://127.0.0.1:3000/ws";
-
-
-
 
 // Nota: pwd letta e mostrata in chiaro. Per nascondere input vedi crate 'rpassword'
 fn read_line(message: &str) -> anyhow::Result<String> {
@@ -63,7 +60,9 @@ async fn main() -> anyhow::Result<()> {
                     println!("Registration: OK");
                 }
                 Ok(resp) if resp.status() == reqwest::StatusCode::CONFLICT => {
-                    println!("Registration: FAILED. \nUsername already registered, trying login...\n");
+                    println!(
+                        "Registration: FAILED. \nUsername already registered, trying login...\n"
+                    );
                 }
                 Ok(resp) => {
                     println!("Registration: FAILED ({}).\n", resp.status());
@@ -79,8 +78,8 @@ async fn main() -> anyhow::Result<()> {
         let resp = match http
             .post(format!("{SERVER_HTTP}/login"))
             .json(&LoginRequest {
-                username: username.clone(), 
-                password: password.clone()
+                username: username.clone(),
+                password: password.clone(),
             })
             .send()
             .await
@@ -112,16 +111,15 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Login: OK, user_id = {}", login_resp.user_id);
 
-    let default_csv_path =
-        Path::new(env!("CARGO_MANIFEST_DIR"))   // Seleziono la cartella che continene il Cargo.toml di client, così da avere un punto di partenza fisso per il path
-            .join("../data/Torino-Asti.csv");
+    let default_csv_path = Path::new(env!("CARGO_MANIFEST_DIR")) // Seleziono la cartella che contiene il Cargo.toml di client, così da avere un punto di partenza fisso per il path
+        .join("../data/Torino-Asti.csv");
     let csv_path = read_csv_path(&default_csv_path)?;
     let speed_factor = read_speed_factor()?;
     let route = movement::load_route(&csv_path)?;
     let simulator = RouteSimulator::new(route, speed_factor)?;
 
     println!("Percorso caricato da {}", csv_path.display());
-    println!("Velocita simulazione: {speed_factor}x");
+    println!("Velocità simulazione: {speed_factor}x");
 
     let (mut write, mut read) = open_client_side_socket(&login_resp.token).await?;
     do_client_side_socket_operations(&mut write, &mut read, simulator).await?;
@@ -131,8 +129,9 @@ async fn main() -> anyhow::Result<()> {
 
 /// Permette all'utente di scegliere il file CSV, fornendone uno di default
 fn read_csv_path(default_path: &Path) -> anyhow::Result<PathBuf> {
-    let input = read_line(
-        &format!("File CSV del percorso [{}]: ", default_path.display()
+    let input = read_line(&format!(
+        "File CSV del percorso [{}]: ",
+        default_path.display()
     ))?;
 
     if input.is_empty() {
@@ -144,17 +143,16 @@ fn read_csv_path(default_path: &Path) -> anyhow::Result<PathBuf> {
 
 /// Impostare quanto velocemente riprodurre il percorso simulato
 fn read_speed_factor() -> anyhow::Result<u32> {
-    let input = read_line("Fattore di velocita [1]: ")?;
+    let input = read_line("Fattore di velocità [1]: ")?;
 
     if input.is_empty() {
-        return Ok(1);   // Riprodotto in tempo reale
+        return Ok(1); // Riprodotto in tempo reale
     }
 
     input
         .parse::<u32>()
-        .map_err(|_| anyhow::anyhow!("Il fattore di velocita deve essere un numero intero"))
+        .map_err(|_| anyhow::anyhow!("Il fattore di velocità deve essere un numero intero"))
 }
-
 
 async fn open_client_side_socket(
     token: &str,
@@ -173,7 +171,6 @@ async fn open_client_side_socket(
     Ok(ws_stream.split())
 }
 
-
 async fn do_client_side_socket_operations<S, R>(
     write: &mut S,
     read: &mut R,
@@ -185,7 +182,7 @@ where
     R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
     let (route_sender, mut route_receiver) = mpsc::channel(16); // Creazione del canale tra simulatore e WebSocket di al massimo 16 punti non letti
-    let simulator_task = tokio::spawn(simulator.start(route_sender));   // Avvio simulatore
+    let simulator_task = tokio::spawn(simulator.start(route_sender)); // Avvio simulatore
     let mut route_finished = false; // tag per fine simulazione e inviare il messaggio di fine TripCompleted
 
     loop {
@@ -216,10 +213,10 @@ where
                                     "Tragitto completato: {numero_coord} punti, \
                                      movimento {tempo_movimento}s, fermo {tempo_fermo}s"
                                 );
-                                break;  // Termine loop websocket perchè il client ha finito il lavoro -> UNICO punto di uscita
+                                break;  // Termine loop websocket perché il client ha finito il lavoro -> UNICO punto di uscita
                             }
                             Ok(WsServerMessage::Error { code, message }) => {
-                                // Non interrompiamo il loop in caso di errore, restiamo collegati così da rifiutare una posizione errata senza abbattere la connesione
+                                // Non interrompiamo il loop in caso di errore, restiamo collegati così da rifiutare una posizione errata senza abbattere la connessione
                                 eprintln!("Errore dal server [{code}]: {message}");
                             }
                             Ok(other) => println!("Aggiornamento ricevuto: {other:?}"), // Prr BroadcastText e DirectText
@@ -249,9 +246,10 @@ where
             point = route_receiver.recv(), if !route_finished => {
                 match point {
                     Some(point) => {
-                        // Simulatore ha emmesso una nuova coordinata
+                        // Simulatore ha emesso una nuova coordinata
                         let message = WsClientMessage::PositionUpdate {
                             coordinata: point.coordinates,
+                            elapsed_seconds: point.elapsed.as_secs(),
                         };
                         let json = serde_json::to_string(&message)?;
 

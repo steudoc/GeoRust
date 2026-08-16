@@ -1,21 +1,25 @@
-use serde::{Deserialize, Serialize,
-            Deserializer,  // Lettore generico dei dati
-            de::Error};    // Metodo custom() per creare errori Serde
+use serde::{
+    Deserialize,
+    Deserializer, // Lettore generico dei dati
+    Serialize,
+    de::Error,
+}; // Metodo custom() per creare errori Serde
 
 /// Coordinata geografica
-#[derive(Serialize, Debug, Clone, Copy, PartialEq)] // Serialize si può derivare senza problemi perchè riceve coordinate già validate da trasfomare in json
+#[derive(Serialize, Debug, Clone, Copy, PartialEq)] // Serialize si può derivare senza problemi perché riceve coordinate già validate da trasformare in json
 pub struct Coordinata {
     latitudine: f64,
     longitudine: f64,
 }
 
 /*
-Non deriviamo Deserialize in modo automatico perchè derivandolo non verrebbe chiamato il costruttore Coordinata::new()
+Non deriviamo Deserialize in modo automatico perché derivandolo non verrebbe chiamato il costruttore Coordinata::new()
 su cui c'è la verifica della validità delle coordinate: Serde ricevendo le coordinate in formato json dal client poteva
 inserire valori di long e lat invalidi, quindi anche serde deve usare il costruttore di Coordinata
 */
 #[derive(Deserialize)]
-struct TempCoordinata { // Per valori letti dal json e non ancora validati
+struct TempCoordinata {
+    // Per valori letti dal json e non ancora validati
     latitudine: f64,
     longitudine: f64,
 }

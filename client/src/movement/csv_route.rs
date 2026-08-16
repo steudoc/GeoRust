@@ -1,6 +1,6 @@
 use super::RoutePoint;
 use anyhow::{Context, Result, bail};
-use common::tracking::Coordinata;
+use common::{POSITION_INTERVAL_SECONDS, tracking::Coordinata};
 use serde::Deserialize;
 use std::{fs::File, io::Read, path::Path, time::Duration};
 
@@ -17,7 +17,7 @@ struct CsvRecord {
 ///
 /// È separata da `load_route` per poterla testare usando stringhe e file temporanei
 pub fn load_route(path: impl AsRef<Path>) -> Result<Vec<RoutePoint>> {
-    let path = path.as_ref();   // Cast a &Path
+    let path = path.as_ref(); // Cast a &Path
 
     let file = File::open(path)
         .with_context(|| format!("impossibile aprire il file {}", path.display()))?;
@@ -51,11 +51,23 @@ fn load_route_from_reader<R: Read>(reader: R) -> Result<Vec<RoutePoint>> {
                 )
             })?;
 
-        if let Some(previous) = route.last()
-            && elapsed <= previous.elapsed
-        {
+        if let Some(previous) = route.last() { // Prendiamo ultimo dato inserito per un controllo di validità sul tempo
+            let expected = previous
+                .elapsed
+                .checked_add(Duration::from_secs(POSITION_INTERVAL_SECONDS))
+                .context("Tempo del percorso troppo grande")?;
+
+            if elapsed != expected {
+                bail!(
+                    "Riga {line}: attesi {} secondi, ricevuti {}. Le posizioni devono essere distanziate di {POSITION_INTERVAL_SECONDS} secondi",
+                    expected.as_secs(),
+                    elapsed.as_secs()
+                );
+            }
+        } else if !elapsed.is_zero() { // Primo inserimento, deve essere 00:00
             bail!(
-                "Riga {line}: il tempo deve essere successivo al tempo del punto precedente (tempo deve essere crescente)"
+                "Riga {line}: il primo punto deve avere tempo 00:00, ricevuti {} secondi",
+                elapsed.as_secs()
             );
         }
 
@@ -175,8 +187,29 @@ time,latitude,longitude
     fn rejects_non_increasing_times() {
         let csv = "\
 time,latitude,longitude
+00:00,45.0,7.0
+00:00,45.1,7.1
+";
+
+        assert!(load_route_from_reader(csv.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn rejects_route_not_starting_at_zero() {
+        let csv = "\
+time,latitude,longitude
 00:30,45.0,7.0
-00:30,45.1,7.1
+";
+
+        assert!(load_route_from_reader(csv.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn rejects_intervals_different_from_thirty_seconds() {
+        let csv = "\
+time,latitude,longitude
+00:00,45.0,7.0
+00:45,45.1,7.1
 ";
 
         assert!(load_route_from_reader(csv.as_bytes()).is_err());

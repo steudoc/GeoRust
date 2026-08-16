@@ -7,10 +7,10 @@ pub use csv_route::load_route; // Permette al client di usare "use client::movem
 mod simulator;
 pub use simulator::RouteSimulator;
 
-/// Rapresenta un punto del percorso simulato
+/// Rappresenta un punto del percorso simulato
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutePoint {
-    pub elapsed: Duration, // Indica quanto tempo è passato dall'inizio del viaggio: serve a decidere QUANDO inviare il punto (non trasmesso al server)
+    pub elapsed: Duration, // Tempo trascorso: decide quando inviare il punto e viene comunicato al server
     pub coordinates: Coordinata,
 }
 

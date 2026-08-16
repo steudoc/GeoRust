@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 
 pub mod tracking;
 
+/// Intervallo di tempo tra due posizioni
+pub const POSITION_INTERVAL_SECONDS: u64 = 30;
+
 // ---------------------------------------------------------------------
 // STATO UTENTE
 // ---------------------------------------------------------------------
@@ -23,10 +26,10 @@ Stato di un utente della flotta, secondo le specifiche del progetto:
  - "Moving": le coordinate sono cambiate rispetto all'ultimo invio
  - "Still": le coordinate non cambiano da almeno 3 minuti
 */
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]   // Deriviamo tratto Default
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)] // Deriviamo tratto Default
 #[serde(rename_all = "snake_case")]
 pub enum UserState {
-    #[default]      // specifichiamo che Disconnected è il valore di default
+    #[default] // specifichiamo che Disconnected è il valore di default
     Disconnected,
     Moving,
     Still,
@@ -76,16 +79,13 @@ pub enum WsClientMessage {
     },
     PositionUpdate {
         coordinata: tracking::Coordinata,
-        /*
-         Non inseriamo anche il timestamp, il server registrerà il tempo usando il timestamp in cui riceve il messaggio:
-         evitiamo che il client invii timestamp dupllicati, nel futuro o nel passato
-         */
+        elapsed_seconds: u64,
     },
-    TripCompleted,  // Comunicare al server che il viaggio è completo
-    /*
-    Invece che considerare la chiusura della WebSocket come fine del tragitto inviamo un messaggio esplicito, poichè
-    la chiusura della websocket potrebbe causarsi anche per altre ragioni, es. errore di rete, crash dell'applicativo, interruzioni improvvise del server o client
-     */
+    TripCompleted, /*
+                   Comunicare al server che il viaggio è completo
+                   Invece che considerare la chiusura della WebSocket come fine del tragitto inviamo un messaggio esplicito, poiché
+                   la chiusura della websocket potrebbe causarsi anche per altre ragioni, es. errore di rete, crash dell'applicativo, interruzioni improvvise del server o client
+                    */
 }
 
 // ---------------------------------------------------------------------
@@ -110,12 +110,13 @@ pub enum WsServerMessage {
         message: String,
     },
     // Altri messaggi possono essere aggiunti qui
-
-    PositionAccepted {  // Conferma acquisizione di una posizione
+    PositionAccepted {
+        // Conferma acquisizione di una posizione
         stato: UserState,
         coord_ricevute: usize,
     },
-    TripCompleted {     // Riepilogo del viaggio
+    TripCompleted {
+        // Riepilogo del viaggio
         numero_coord: usize,
         tempo_movimento: u64,
         tempo_fermo: u64,
@@ -136,6 +137,7 @@ mod tests {
     fn position_update_round_trip_preserves_coordinates() {
         let message = WsClientMessage::PositionUpdate {
             coordinata: tracking::Coordinata::new(45.0, 7.0).unwrap(),
+            elapsed_seconds: 30,
         };
 
         let json = serde_json::to_string(&message).unwrap();
@@ -149,7 +151,8 @@ mod tests {
         let json = r#"{
             "type": "position_update",
             "payload": {
-                "coordinates": { "latitude": 100.0, "longitude": 7.0 }
+                "coordinata": { "latitudine": 100.0, "longitudine": 7.0 },
+                "elapsed_seconds": 0
             }
         }"#;
 
