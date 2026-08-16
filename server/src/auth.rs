@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
+use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use axum::Json;
 use common::{LoginRequest, LoginResponse, RegisterRequest, RegisterResponse};
 use rand_core::OsRng;
 use sqlx::Row;
@@ -14,7 +14,7 @@ use crate::state::AppState;
 
 // POST /register
 /*
-Crea un nuovo utente. 
+Crea un nuovo utente.
 argon2 genera un salt casuale e produce un hash (il formato è salt + parametri + hash, tutto in una stringa)
 */
 pub async fn register(
@@ -35,26 +35,31 @@ pub async fn register(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .to_string();
 
-    let result = sqlx::query(   // r# -> raw format, automatically escapes char like " or '
+    let result = sqlx::query(
+        // r# -> raw format, automatically escapes char like " or '
         r#"         
         INSERT INTO users (username, password_hash, current_state)
         VALUES (?1, ?2, 'disconnected')
         "#,
-    ).bind(&req.username)
+    )
+    .bind(&req.username)
     .bind(&password_hash)
     .execute(&state.db)
     .await
     .map_err(|e| {
         if e.to_string().contains("UNIQUE") {
-            (StatusCode::CONFLICT, "username already registered".to_string())
+            (
+                StatusCode::CONFLICT,
+                "username already registered".to_string(),
+            )
         } else {
             (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
         }
     })?;
 
-    Ok(Json(RegisterResponse { 
+    Ok(Json(RegisterResponse {
         user_id: result.last_insert_rowid(),
-     }))
+    }))
 }
 
 // POST /login
@@ -67,11 +72,11 @@ pub async fn login(
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, (StatusCode, String)> {
     let row = sqlx::query("SELECT id, password_hash FROM users WHERE username = ?1")
-    .bind(&req.username)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-    .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
+        .bind(&req.username)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::UNAUTHORIZED, "invalid credentials".to_string()))?;
 
     let user_id: i64 = row
         .try_get("id")
@@ -89,10 +94,7 @@ pub async fn login(
     /*
     Nota: qui il token viene generato al volo e NON viene salvato. Per essere più rigorosi, si potrebbe tenere una HashMap<token, user_id> in AppState. Altrimenti va segnalato nel report come semplificazione */
     let token = Uuid::new_v4().to_string();
-    state.tokens
-        .lock()
-        .unwrap()
-        .insert(token.clone(), user_id);
+    state.tokens.lock().unwrap().insert(token.clone(), user_id);
 
     Ok(Json(LoginResponse { user_id, token }))
 }

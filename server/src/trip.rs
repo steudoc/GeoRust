@@ -1,31 +1,38 @@
+use common::{POSITION_INTERVAL_SECONDS, UserState, tracking::Coordinata};
 use std::{error::Error, fmt, time::Duration};
-use chrono::{DateTime, Utc};
-use common::{UserState, tracking::Coordinata};
 
-const STILL_THRESHOLD: Duration = Duration::from_secs(3 * 60);  // 3 minuti soglia per passare da in movimento a fermo
+const STILL_THRESHOLD: Duration = Duration::from_secs(3 * 60); // 3 minuti soglia per passare da in movimento a fermo
+const EARTH_RADIUS_KM: f64 = 6_371.0; // Per calcolare la distanza totale del tragitto
 
-/// Posizione del tragitto associata al tempo in cui il server l'ha ricevuta
+/// Posizione del tragitto associata al tempo logico trascorso nel CSV.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PositionSample {
     pub coordinates: Coordinata,
-    pub received_at: DateTime<Utc>,
+    pub elapsed_seconds: u64,
 }
 
-/// Errore prodotto quando i tempi non sono in ordine crescente
+/// Errori prodotti da una sequenza temporale non conforme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TripError {
-    NonIncreasingTimestamp,
+    InvalidInitialTime { received: u64 },
+    InvalidTimeInterval { expected: u64, received: u64 },
+    ElapsedTimeOverflow,
 }
 
 impl fmt::Display for TripError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NonIncreasingTimestamp => {
+            Self::InvalidInitialTime { received } => {
                 write!(
                     formatter,
-                    "Il timestamp deve essere successivo al precedente"
+                    "Il primo punto deve avere tempo logico 0 secondi, ricevuti {received}"
                 )
             }
+            Self::InvalidTimeInterval { expected, received } => write!(
+                formatter,
+                "Intervallo temporale non valido: attesi {expected} secondi, ricevuti {received}. Le posizioni devono essere distanziate di {POSITION_INTERVAL_SECONDS} secondi"
+            ),
+            Self::ElapsedTimeOverflow => write!(formatter, "Tempo logico troppo grande"),
         }
     }
 }
@@ -78,31 +85,67 @@ impl Trip {
         self.stopped_time.as_secs()
     }
 
+    /// Calcola la distanza totale sommando tutti i segmenti consecutivi e arrotonda a due cifre decimali
+    pub fn get_distance_km(&self) -> f64 {
+        let total_distance = self
+            .positions
+            .windows(2)
+            .map(|segment| Self::distance_between(&segment[0].coordinates, &segment[1].coordinates))
+            .sum::<f64>();
+
+        (total_distance * 100.0).round() / 100.0
+    }
+
+    /// Calcola con la formula di Haversine la distanza tra due coordinate
+    fn distance_between(first: &Coordinata, last: &Coordinata) -> f64 {
+        let first_latitude = first.get_latitudine().to_radians();
+        let last_latitude = last.get_latitudine().to_radians();
+        let latitude_delta = last_latitude - first_latitude;
+        let longitude_delta = (last.get_longitudine() - first.get_longitudine()).to_radians();
+
+        let haversine = (latitude_delta / 2.0).sin().powi(2)
+            + first_latitude.cos() * last_latitude.cos() * (longitude_delta / 2.0).sin().powi(2);
+        let haversine = haversine.clamp(0.0, 1.0);
+        let angular_distance = 2.0 * haversine.sqrt().atan2((1.0 - haversine).sqrt());
+
+        EARTH_RADIUS_KM * angular_distance
+    }
 
     /// Registra una posizione e restituisce il nuovo stato dell'utente
     pub fn record_position(
         &mut self,
         coordinates: Coordinata,
-        received_at: DateTime<Utc>,
+        elapsed_seconds: u64,
     ) -> Result<UserState, TripError> {
+        let Some(previous) = self.positions.last().cloned() else {
+            // Se non ci sono ancora coordinate inviate, questa è la prima e deve avere tempo zero
+            if elapsed_seconds != 0 {
+                return Err(TripError::InvalidInitialTime {
+                    received: elapsed_seconds,
+                });
+            }
 
-        let Some(previous) = self.positions.last().cloned() else { // Se non ci sono ancora coordinate inviate, questa è la prima
             self.positions.push(PositionSample {
                 coordinates,
-                received_at,
+                elapsed_seconds,
             });
             self.state = UserState::Still; // Si passa allo stato fermo: la transizione da fermo a in movimento si ha al primo cambiamento di coordinata
             return Ok(self.state);
         };
 
-        if received_at <= previous.received_at {
-            return Err(TripError::NonIncreasingTimestamp);
+        let expected = previous
+            .elapsed_seconds
+            .checked_add(POSITION_INTERVAL_SECONDS)
+            .ok_or(TripError::ElapsedTimeOverflow)?; // I tempi devono avanzare di 30 secondi altrimenti errore 
+
+        if elapsed_seconds != expected {
+            return Err(TripError::InvalidTimeInterval {
+                expected,
+                received: elapsed_seconds,
+            });
         }
 
-        let elapsed = received_at
-            .signed_duration_since(previous.received_at)
-            .to_std()
-            .map_err(|_| TripError::NonIncreasingTimestamp)?;
+        let elapsed = Duration::from_secs(POSITION_INTERVAL_SECONDS);
         let position_changed = coordinates != previous.coordinates;
 
         match self.state {
@@ -140,7 +183,7 @@ impl Trip {
 
         self.positions.push(PositionSample {
             coordinates,
-            received_at,
+            elapsed_seconds,
         });
 
         Ok(self.state)
@@ -159,28 +202,15 @@ impl Trip {
     }
 }
 
-
-
-
-
-
 // ---------------------------------------------------------------------
 // TEST
 // ---------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
-    use chrono::{TimeZone, Utc};
-
     use super::*;
 
     fn coordinates(latitude: f64) -> Coordinata {
         Coordinata::new(latitude, 7.0).expect("coordinate del test valide")
-    }
-
-    fn timestamp(seconds: i64) -> DateTime<Utc> {
-        Utc.timestamp_opt(seconds, 0)
-            .single()
-            .expect("timestamp del test valido")
     }
 
     #[test]
@@ -198,9 +228,7 @@ mod tests {
     fn first_position_changes_state_to_still() {
         let mut trip = Trip::new(42);
 
-        let state = trip
-            .record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
+        let state = trip.record_position(coordinates(45.0), 0).unwrap();
 
         assert_eq!(state, UserState::Still);
         assert_eq!(trip.get_positions().len(), 1);
@@ -211,12 +239,9 @@ mod tests {
     #[test]
     fn unchanged_position_while_still_increases_stopped_time() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
+        trip.record_position(coordinates(45.0), 0).unwrap();
 
-        let state = trip
-            .record_position(coordinates(45.0), timestamp(30))
-            .unwrap();
+        let state = trip.record_position(coordinates(45.0), 30).unwrap();
 
         assert_eq!(state, UserState::Still);
         assert_eq!(trip.get_stopped_seconds(), 30);
@@ -226,12 +251,9 @@ mod tests {
     #[test]
     fn changed_position_changes_state_to_moving() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
+        trip.record_position(coordinates(45.0), 0).unwrap();
 
-        let state = trip
-            .record_position(coordinates(45.1), timestamp(30))
-            .unwrap();
+        let state = trip.record_position(coordinates(45.1), 30).unwrap();
 
         assert_eq!(state, UserState::Moving);
         assert_eq!(trip.get_moving_seconds(), 30);
@@ -241,14 +263,15 @@ mod tests {
     #[test]
     fn moving_user_remains_moving_before_three_still_minutes() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
-        trip.record_position(coordinates(45.1), timestamp(30))
-            .unwrap();
+        trip.record_position(coordinates(45.0), 0).unwrap();
+        trip.record_position(coordinates(45.1), 30).unwrap();
 
-        let state = trip
-            .record_position(coordinates(45.1), timestamp(30 + 179))
-            .unwrap();
+        let mut state = UserState::Moving;
+        for elapsed_seconds in [60, 90, 120, 150, 180] {
+            state = trip
+                .record_position(coordinates(45.1), elapsed_seconds)
+                .unwrap();
+        }
 
         assert_eq!(state, UserState::Moving);
         assert_eq!(trip.get_moving_seconds(), 30);
@@ -258,14 +281,15 @@ mod tests {
     #[test]
     fn moving_user_becomes_still_after_three_minutes() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
-        trip.record_position(coordinates(45.1), timestamp(30))
-            .unwrap();
+        trip.record_position(coordinates(45.0), 0).unwrap();
+        trip.record_position(coordinates(45.1), 30).unwrap();
 
-        let state = trip
-            .record_position(coordinates(45.1), timestamp(210))
-            .unwrap();
+        let mut state = UserState::Moving;
+        for elapsed_seconds in [60, 90, 120, 150, 180, 210] {
+            state = trip
+                .record_position(coordinates(45.1), elapsed_seconds)
+                .unwrap();
+        }
 
         assert_eq!(state, UserState::Still);
         assert_eq!(trip.get_moving_seconds(), 30);
@@ -275,16 +299,11 @@ mod tests {
     #[test]
     fn movement_before_three_minutes_assigns_pending_time_to_movement() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
-        trip.record_position(coordinates(45.1), timestamp(30))
-            .unwrap();
-        trip.record_position(coordinates(45.1), timestamp(60))
-            .unwrap();
+        trip.record_position(coordinates(45.0), 0).unwrap();
+        trip.record_position(coordinates(45.1), 30).unwrap();
+        trip.record_position(coordinates(45.1), 60).unwrap();
 
-        let state = trip
-            .record_position(coordinates(45.2), timestamp(90))
-            .unwrap();
+        let state = trip.record_position(coordinates(45.2), 90).unwrap();
 
         assert_eq!(state, UserState::Moving);
         assert_eq!(trip.get_moving_seconds(), 90);
@@ -294,12 +313,9 @@ mod tests {
     #[test]
     fn disconnect_commits_unconfirmed_time_as_movement() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(0))
-            .unwrap();
-        trip.record_position(coordinates(45.1), timestamp(30))
-            .unwrap();
-        trip.record_position(coordinates(45.1), timestamp(60))
-            .unwrap();
+        trip.record_position(coordinates(45.0), 0).unwrap();
+        trip.record_position(coordinates(45.1), 30).unwrap();
+        trip.record_position(coordinates(45.1), 60).unwrap();
 
         trip.disconnect();
 
@@ -309,14 +325,51 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_increasing_timestamps_without_adding_samples() {
+    fn rejects_initial_time_different_from_zero() {
         let mut trip = Trip::new(42);
-        trip.record_position(coordinates(45.0), timestamp(30))
+
+        let result = trip.record_position(coordinates(45.0), 30);
+
+        assert_eq!(result, Err(TripError::InvalidInitialTime { received: 30 }));
+        assert!(trip.get_positions().is_empty());
+    }
+
+    #[test]
+    fn rejects_intervals_different_from_thirty_seconds() {
+        let mut trip = Trip::new(42);
+        trip.record_position(coordinates(45.0), 0).unwrap();
+
+        let result = trip.record_position(coordinates(45.1), 45);
+
+        assert_eq!(
+            result,
+            Err(TripError::InvalidTimeInterval {
+                expected: 30,
+                received: 45,
+            })
+        );
+        assert_eq!(trip.get_positions().len(), 1);
+    }
+
+    #[test]
+    fn distance_is_the_sum_of_all_consecutive_segments() {
+        let mut trip = Trip::new(42);
+        trip.record_position(Coordinata::new(0.0, 0.0).unwrap(), 0)
+            .unwrap();
+        trip.record_position(Coordinata::new(0.0, 1.0).unwrap(), 30)
+            .unwrap();
+        trip.record_position(Coordinata::new(0.0, 0.0).unwrap(), 60)
             .unwrap();
 
-        let result = trip.record_position(coordinates(45.1), timestamp(30));
+        assert_eq!(trip.get_distance_km(), 222.39);
+    }
 
-        assert_eq!(result, Err(TripError::NonIncreasingTimestamp));
-        assert_eq!(trip.get_positions().len(), 1);
+    #[test]
+    fn distance_is_zero_with_fewer_than_two_coordinates() {
+        let mut trip = Trip::new(42);
+        assert_eq!(trip.get_distance_km(), 0.0);
+
+        trip.record_position(coordinates(45.0), 0).unwrap();
+        assert_eq!(trip.get_distance_km(), 0.0);
     }
 }
