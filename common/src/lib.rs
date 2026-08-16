@@ -35,6 +35,8 @@ pub enum UserState {
     Still,
 }
 
+
+
 // ---------------------------------------------------------------------
 // REST: Registrazione / Login
 // ---------------------------------------------------------------------
@@ -62,9 +64,22 @@ pub struct LoginResponse {
     pub token: String, // token facile da usare nelle req successive
 }
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+
+
+// ---------------------------------------------------------------------
+// MOVIMENTO
+// ---------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MovementStats {
+    pub period: String,
+    pub distance: f64,
+    pub total_time: f64,
+    pub total_pause: f64,
+    pub avg_velocity: f64,
 }
+
+
 
 // ---------------------------------------------------------------------
 // WEBSOCKET: Messaggi Client -> Server
@@ -126,12 +141,6 @@ pub enum WsServerMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
 
     #[test]
     fn position_update_round_trip_preserves_coordinates() {

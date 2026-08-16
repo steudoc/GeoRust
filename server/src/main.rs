@@ -1,5 +1,8 @@
+mod admin;
 mod auth;
+mod info;
 mod state;
+mod stats;
 #[cfg_attr(not(test), allow(dead_code))]
 mod trip;
 
@@ -29,10 +32,18 @@ use axum::{
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
 use tokio::sync::mpsc;
+use tracing_appender::rolling;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // crea un file di log giornaliero per gli eventi del server
+    let file_appender = rolling::daily("./logs", "websocket.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    tracing_subscriber::fmt()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .init();
 
     let db_url = format!("sqlite://{DB_PATH}?mode=rw"); // mode read/write
     let pool = SqlitePoolOptions::new()
@@ -48,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
 
     initialize_database(&pool).await?;
 
-    let state = AppState::new(pool);
+    let state = AppState::new(pool.clone());
 
     let app = Router::new()
         .route("/register", post(auth::register))
@@ -58,6 +69,13 @@ async fn main() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("Server running at http://0.0.0.0:3000");
+
+    // Lancia il logger della CPU in background
+    tokio::spawn(info::start_cpu_logger());
+
+    // setup della CLI amministratore
+    tokio::spawn(admin::start_admin_console(pool.clone()));
+
     axum::serve(listener, app).await?;
 
     Ok(())
@@ -93,7 +111,7 @@ async fn ws_handler(
 
 // Gestisce la connessione una volta "promossa" a WebSocket
 async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state: Arc<AppState>) {
-    println!("Client connesso: user_id = {user_id}");
+    tracing::info!("Client connesso: user_id = {user_id}");
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
@@ -114,17 +132,17 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
         tokio::select! {
             // intanto ascolta anche eventuali messaggi/chiusura dal client
             incoming = ws_receiver.next() => {
-                //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name. 
+                //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name.
                 //In the future we will use this channel to receive messages from the client and make actions from the server accordingly.
                 match incoming {
                     Some(Ok(Message::Close(_))) | None => {
-                        println!("Connessione chiusa dal client");
+                        tracing::info!("Connessione chiusa dal client");
                         break;
                     }
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text, timestamp }) => {
-                                println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
+                              println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
                             },
                             Ok(WsClientMessage::PositionUpdate { coordinata, elapsed_seconds }) => {
                                 let response = match state.record_position(user_id, coordinata, elapsed_seconds).await {
@@ -212,10 +230,10 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                         }
                     }
                     Some(Ok(_)) => {
-                        println!("Non text message received");
+                        tracing::debug!("Non text message received");
                     }
                     Some(Err(e)) => {
-                        println!("Errore sul socket: {e}");
+                        tracing::error!("Errore sul socket: {e}");
                         break;
                     }
                 }
@@ -236,12 +254,12 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                     Ok(msg) => {
                         let msg_json = serde_json::to_string(&msg).unwrap();
                         if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                            println!("Client disconnesso durante invio broadcast, chiudo il loop");
+                            tracing::warn!("Client disconnesso durante invio direct/broadcast, chiudo il loop");
                             break;
                         }
                     }
                     Err(e) => {
-                        println!("Errore nel ricevere broadcast: {e}");
+                        tracing::error!("Errore nel ricevere broadcast: {e}");
                         break;
                     }
                 }
