@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::state::AppState;
+use crate::{messaging, state::AppState};
 
 
 type UserId = i64;
@@ -28,7 +28,7 @@ impl SimpleConsole {
         // Loop until the user types "exit"
         loop {
             println!("Simple Console - Type 'help' for commands");
-            println!("> ");
+            print!("> ");
 
             // Read input from the user
             let mut input = String::new();
@@ -65,7 +65,7 @@ impl SimpleConsole {
                     }
                     let message = input[2..].join(" ");
                     let user_id = user_id.unwrap();
-                    if let Err(e) = self.state.send_direct_message(&user_id, message).await {
+                    if let Err(e) = messaging::send_admin_direct_message(&self.state, user_id, &message).await {
                         println!("Errore: {e}");
                     }
                 },
@@ -76,7 +76,7 @@ impl SimpleConsole {
                     }
 
                     let message = input[1..].join(" ");
-                    if let Err(e) = self.state.send_broadcast_message(message) {
+                    if let Err(e) = messaging::send_admin_broadcast_message(&self.state, &message).await {
                         println!("Errore: {e}");
                     }
                 },
