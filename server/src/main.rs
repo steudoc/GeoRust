@@ -4,7 +4,7 @@ mod console;
 mod messaging;
 
 use std::sync::Arc;
-use common::{WsClientMessage::{self, Handshake, Text}, WsServerMessage};
+use common::{WsClientMessage::{self, DirectTextAck, Text}};
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePoolOptions;
 
@@ -22,7 +22,6 @@ use axum::{
 };
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
-use tokio::sync::mpsc;
 
 
 #[tokio::main]
@@ -114,97 +113,42 @@ async fn do_server_side_socket_operations(
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
     // Crezione del canale MPSC per i messaggi diretti
-    let (direct_tx, mut direct_rx) = mpsc::channel::<WsServerMessage>(100);
-    
-    // Registrazione del sender nello stato globale
-    state.register_client(user_id, direct_tx.clone()).await;
+    let mut direct_rx = state.message_service.add_client(user_id).await;
 
     // Iscrizione al canale BROADCAST globale
-    let mut broadcast_rx = state.register_broadcast();
-    let mut handshake_completed = false;
+    let mut broadcast_rx = state.message_service.subscribe_broadcast();
+
+    // Invio automatico messaggi pendenti non letti
+    if let Ok(unread_msgs) = state.message_service.get_unread_messages(user_id).await {
+        for msg in unread_msgs {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                let _ = ws_sender.send(Message::Text(json)).await;
+            }
+        }
+    }
 
     loop {
         tokio::select! {
             // Handle messaggi in arrivo dal client sulla connessione WebSocket
             incoming = ws_receiver.next() => {
                 match incoming {
-                    Some(Ok(Message::Close(_))) | None => {
-                        tracing::info!("Client disconnesso: user_id = {user_id}");
-                        break;
-                    }
+                    Some(Ok(Message::Close(_))) | None => break, // client disconnesso
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
-                            Ok(Handshake { last_received }) => {
-                                if handshake_completed {
-                                    tracing::warn!("Handshake duplicato da user_id {user_id}");
-                                    continue;
+                            Ok(Text { text: msg_text }) => {
+                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await {
+                                    let err_msg = err.to_client_message();
+                                    let _ = ws_sender.send(Message::Text(serde_json::to_string(&err_msg).unwrap())).await;
                                 }
-
-                                let pending = match messaging::handle_client_handshake(&state, user_id, last_received).await {
-                                    Ok(pending) => pending,
-                                    Err(e) => {
-                                        tracing::error!("Errore nel recupero messaggi pendenti per user_id {user_id}: {e}");
-                                        break;
-                                    }
-                                };
-
-                                let mut replay_failed = false;
-                                for pending_msg in pending {
-                                    let msg_json = match serde_json::to_string(&pending_msg) {
-                                        Ok(value) => value,
-                                        Err(e) => {
-                                            tracing::error!("Errore serializzazione messaggio pendente per user_id {user_id}: {e}");
-                                            replay_failed = true;
-                                            break;
-                                        }
-                                    };
-
-                                    if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                                        tracing::warn!("Client {user_id} disconnesso durante l'invio messaggi pendenti");
-                                        replay_failed = true;
-                                        break;
-                                    }
-                                }
-
-                                if replay_failed {
-                                    break;
-                                }
-
-                                handshake_completed = true;
-                            },
-                            Ok(Text { text }) => {
-                                if !handshake_completed {
-                                    let err = WsServerMessage::Error {
-                                        code: "handshake_required".to_string(),
-                                        message: "Handshake non completato. Inviare prima un messaggio di Handshake.".to_string(),
-                                    };
-                                    match serde_json::to_string(&err) {
-                                        Ok(payload) => {
-                                            if ws_sender.send(Message::Text(payload)).await.is_err() {
-                                                tracing::warn!("Client {user_id} disconnesso durante l'invio errore handshake");
-                                                break;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::error!("Errore serializzazione messaggio errore handshake per user_id {user_id}: {e}");
-                                            break;
-                                        }
-                                    }
-                                    continue;
-                                }
-
-                                if let Err(e) = messaging::handle_client_to_server_message(&state, user_id, &text).await {
-                                    tracing::error!("Errore nel gestire messaggio da user_id {user_id}: {e}");
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!("Errore nel parsing del messagio: {e}");
                             }
+                            Ok(DirectTextAck { id }) => {
+                                if let Err(e) = state.message_service.acknowledge_message(user_id, id).await {
+                                    tracing::warn!("Errore ACK per user_id {user_id}: {:?}", e);                                }
+                            },
+                            Err(e) => tracing::error!("Errore nel parsing del messagio: {e}"),
                         }
                     }
-                    Some(Ok(_)) => {
-                        tracing::warn!("Non text message received from user_id {user_id}");
-                    }
+                    Some(Ok(_)) => tracing::warn!("Non text message received from user_id {user_id}"),
                     Some(Err(e)) => {
                         tracing::error!("Errore sul socket per user_id {user_id}: {e}");
                         break;
@@ -214,37 +158,19 @@ async fn do_server_side_socket_operations(
 
             // Handle messaggi diretti
             Some(msg) = direct_rx.recv() => {
-                let msg_json = match serde_json::to_string(&msg) {
-                    Ok(value) => value,
-                    Err(e) => {
-                        tracing::error!("Errore serializzazione messaggio diretto per user_id {user_id}: {e}");
+                if let Ok(msg_json) = serde_json::to_string(&msg) {
+                    if ws_sender.send(Message::Text(msg_json)).await.is_err() {
+                        tracing::error!("Errore invio messaggio diretto a user_id {user_id}");
                         break;
                     }
-                };
-                if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                    tracing::warn!("Client {user_id} disconnesso durante l'invio messaggio");
-                    break;
                 }
             }
 
             // Handle messaggi broadcast
-            msg = broadcast_rx.recv() => {
-                match msg {
-                    Ok(msg) => {
-                        let msg_json = match serde_json::to_string(&msg) {
-                            Ok(value) => value,
-                            Err(e) => {
-                                tracing::error!("Errore serializzazione messaggio broadcast per user_id {user_id}: {e}");
-                                break;
-                            }
-                        };
-                        if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                            tracing::info!("Client {user_id} disconnesso durante l'invio messaggio");
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Errore nel ricevere messaggio broadcast per user_id {user_id}: {e}");
+            Ok(msg) = broadcast_rx.recv() => {
+                if let Ok(msg_json) = serde_json::to_string(&msg) {
+                    if ws_sender.send(Message::Text(msg_json)).await.is_err() {
+                        tracing::error!("Errore invio messaggio broadcast a user_id {user_id}");
                         break;
                     }
                 }
@@ -252,6 +178,6 @@ async fn do_server_side_socket_operations(
         }
     }
 
-    state.unregister_client(user_id).await;
-    println!("Client disconnesso: user_id = {user_id}");
+    state.message_service.remove_client(user_id).await;
+    tracing::info!("Client disconnesso: user_id = {user_id}");
 }
