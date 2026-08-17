@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use chrono::{DateTime, Utc};
+use chrono::Local;
 
 use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage};
 use futures_util::{
@@ -131,8 +131,6 @@ async fn open_client_side_socket(
     Ok(ws_stream.split())
 }
 
-
-
 async fn do_client_side_socket_operations<S, R>(
     write: &mut S,
     read: &mut R,
@@ -142,12 +140,6 @@ where
     S::Error: std::error::Error + Send + Sync + 'static,
     R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
-    let mut last_received = DateTime::<Utc>::UNIX_EPOCH;
-
-    // Invia handshake iniziale al server con l'ultimo timestamp ricevuto
-    let handshake = serde_json::to_string(&WsClientMessage::Handshake { last_received })?;
-    write.send(Message::Text(handshake.into())).await?;
-
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     loop {
@@ -162,36 +154,40 @@ where
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsServerMessage>(&text) {
                             Ok(DirectText { id, text, timestamp }) => {
-                                println!("Messaggio diretto ricevuto: {text} (id: {id}, timestamp: {timestamp})");
-                                if timestamp > last_received {
-                                    last_received = timestamp;
-                                }
+                                let time_str = timestamp.with_timezone(&Local).format("%H:%M:%S");
+                                print!("\r[Diretto #{id} {time_str}] {text}\n> ");
+                                io::stdout().flush()?;
+
+                                // Risposta automatica di ACK al server
+                                let ack_payload = serde_json::to_string(&WsClientMessage::DirectTextAck { id })?;
+                                let _ = write.send(Message::Text(ack_payload.into())).await;
                             },
                             Ok(BroadcastText { id, text, timestamp }) => {
-                                println!("Messaggio broadcast ricevuto: {text} (id: {id}, timestamp: {timestamp})");
-                                if timestamp > last_received {
-                                    last_received = timestamp;
-                                }
+                                let time_str = timestamp.with_timezone(&Local).format("%H:%M:%S");
+                                print!("\r[Broadcast #{id} {time_str}] {text}\n> ");
+                                io::stdout().flush()?;
                             },
                             Ok(Error { code, message }) => {
-                                println!("Errore ricevuto: {code} - {message}");
+                                print!("\r[Errore {code}] {message}\n> ");
+                                io::stdout().flush()?;
                             },
                             Err(e) => {
-                                println!("Errore nel parsing del messaggio: {e}");
+                                print!("\rErrore di deserializzazione dal server: {e}\n> ");
+                                io::stdout().flush()?;
                             }
                         }
                     }
                     Some(Ok(Message::Close(_))) => {
-                        println!("Server ha chiuso la connessione");
+                        println!("\rIl server ha chiuso la connessione.");
                         break;
                     }
                     Some(Ok(_)) => {}
                     Some(Err(e)) => {
-                        println!("Errore: {e}");
+                        println!("\rErrore di rete: {e}");
                         break;
                     }
                     None => {
-                        println!("Connessione chiusa");
+                        println!("\rConnessione terminata.");
                         break;
                     }
                 }
@@ -222,7 +218,6 @@ where
 
                         let payload = serde_json::to_string(&WsClientMessage::Text {
                             text: argument.to_string(),
-                            //timestamp: Utc::now(),
                         })?;
 
                         write.send(Message::Text(payload.into())).await?;
@@ -237,6 +232,9 @@ where
                         println!("Unknown command: {command}");
                     }
                 }
+
+                print!("> ");
+                io::stdout().flush()?;
             }
             
         }
