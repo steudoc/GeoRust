@@ -72,13 +72,13 @@ pub fn add(left: u64, right: u64) -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WsClientMessage {
-    Handshake {
-        last_received: DateTime<Utc>,
-    },
     Text {
         text: String,
         //timestamp: DateTime<Utc>,
     },
+    DirectTextAck {
+        id: i64,
+    }
     // Altri messaggi possono essere aggiunti qui
 }
 
