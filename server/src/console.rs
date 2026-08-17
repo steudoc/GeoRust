@@ -1,6 +1,7 @@
+use std::io::{self, Write};
 use std::sync::Arc;
 
-use crate::{messaging, state::AppState};
+use crate::state::AppState;
 
 
 type UserId = i64;
@@ -25,10 +26,12 @@ impl SimpleConsole {
      * Runs the console, reading commands from standard input and executing them.
      */
     pub async fn run(&self) -> anyhow::Result<()> {
+        println!("Simple Console - Type 'help' for commands");
+        
         // Loop until the user types "exit"
         loop {
-            println!("Simple Console - Type 'help' for commands");
             print!("> ");
+            io::stdout().flush()?; // Ensure the prompt is displayed
 
             // Read input from the user
             let mut input = String::new();
@@ -65,7 +68,7 @@ impl SimpleConsole {
                     }
                     let message = input[2..].join(" ");
                     let user_id = user_id.unwrap();
-                    if let Err(e) = messaging::send_admin_direct_message(&self.state, user_id, &message).await {
+                    if let Err(e) = self.state.message_service.send_admin_direct_message(user_id, &message).await {
                         println!("Errore: {e}");
                     }
                 },
@@ -76,7 +79,7 @@ impl SimpleConsole {
                     }
 
                     let message = input[1..].join(" ");
-                    if let Err(e) = messaging::send_admin_broadcast_message(&self.state, &message).await {
+                    if let Err(e) = self.state.message_service.send_admin_broadcast_message(&message).await {
                         println!("Errore: {e}");
                     }
                 },
