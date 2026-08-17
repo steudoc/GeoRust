@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage};
 use futures_util::{
@@ -142,6 +142,12 @@ where
     S::Error: std::error::Error + Send + Sync + 'static,
     R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
+    let mut last_received = DateTime::<Utc>::UNIX_EPOCH;
+
+    // Invia handshake iniziale al server con l'ultimo timestamp ricevuto
+    let handshake = serde_json::to_string(&WsClientMessage::Handshake { last_received })?;
+    write.send(Message::Text(handshake.into())).await?;
+
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
 
     loop {
@@ -154,13 +160,18 @@ where
             msg = read.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        // println!("Aggiornamento ricevuto: {text}");
                         match serde_json::from_str::<WsServerMessage>(&text) {
                             Ok(DirectText { id, text, timestamp }) => {
                                 println!("Messaggio diretto ricevuto: {text} (id: {id}, timestamp: {timestamp})");
+                                if timestamp > last_received {
+                                    last_received = timestamp;
+                                }
                             },
                             Ok(BroadcastText { id, text, timestamp }) => {
                                 println!("Messaggio broadcast ricevuto: {text} (id: {id}, timestamp: {timestamp})");
+                                if timestamp > last_received {
+                                    last_received = timestamp;
+                                }
                             },
                             Ok(Error { code, message }) => {
                                 println!("Errore ricevuto: {code} - {message}");
@@ -211,7 +222,7 @@ where
 
                         let payload = serde_json::to_string(&WsClientMessage::Text {
                             text: argument.to_string(),
-                            timestamp: Utc::now(),
+                            //timestamp: Utc::now(),
                         })?;
 
                         write.send(Message::Text(payload.into())).await?;
