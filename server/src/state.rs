@@ -1,12 +1,11 @@
 use crate::trip::{Trip, TripError};
 use anyhow::Context;
 use chrono::NaiveDate;
-use common::{UserState, WsServerMessage, tracking::Coordinata};
+use common::{UserState, tracking::Coordinata};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::{RwLock, broadcast, mpsc};
-use sqlx::SqlitePool;
+use tokio::sync::RwLock;
 
 use crate::messaging::MessageService;
 

@@ -152,8 +152,10 @@ async fn do_server_side_socket_operations(
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text: msg_text }) => {
                                 if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await {
-                                    let err_msg = err.to_client_message();
-                                    let _ = ws_sender.send(Message::Text(serde_json::to_string(&err_msg).unwrap())).await;
+                                    if !send_server_message(&mut ws_sender, &err.to_client_message()).await {
+                                        tracing::error!("Errore durante l'invio della risposta al client");
+                                        break;
+                                    }
                                 }
                             },
                             Ok(DirectTextAck { id }) => {
@@ -192,13 +194,15 @@ async fn do_server_side_socket_operations(
                                         match state.save_trip(user_id, trip_date, summary).await {
                                             Ok(trip_id) => {
                                                 trip_finished = true;
-                                                println!(
+                                                let msg = format!(
                                                     "Tragitto {trip_id} completato per user_id {user_id}: {} punti, {:.2} km, movimento {}s, fermo {}s",
                                                     summary.points_received,
                                                     summary.distance_km,
                                                     summary.moving_seconds,
                                                     summary.stopped_seconds
                                                 );
+                                                println!("{}", msg);
+                                                tracing::info!("{}", msg);
                                                 WsServerMessage::TripCompleted {
                                                     numero_coord: summary.points_received,
                                                     tempo_movimento: summary.moving_seconds,
@@ -232,7 +236,7 @@ async fn do_server_side_socket_operations(
                                 }
                             }
                             Err(e) => {
-                                println!("Errore nel parsing del messaggio: {e}");
+                                tracing::warn!("Errore nel parsing del messaggio: {e}");
                                 let response = WsServerMessage::Error {
                                     code: "invalid_message".to_string(),
                                     message: format!("Messaggio WebSocket non valido: {e}"),
@@ -244,8 +248,9 @@ async fn do_server_side_socket_operations(
                                 }
                             },
                         }
-                    }
-                    Some(Ok(_)) => tracing::warn!("Non text message received from user_id {user_id}"),
+                    },
+                    Some(Ok(Message::Ping(_))) => {},
+                    Some(Ok(_)) => tracing::warn!("Messaggio non testuale ricevuto da user_id {user_id}"),
                     Some(Err(e)) => {
                         tracing::error!("Errore sul socket per user_id {user_id}: {e}");
                         break;
@@ -254,15 +259,18 @@ async fn do_server_side_socket_operations(
             }
 
             // Handle messaggi diretti
-            Some(msg) = direct_rx.recv() => {
-                match serde_json::to_string(&msg) {
-                    Ok(msg_json) => {
-                        if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                            tracing::warn!("Client disconnesso durante invio direct a user_id {user_id}");
+            msg = direct_rx.recv() => {
+                match msg {
+                    Some(msg) => {
+                        if !send_server_message(&mut ws_sender, &msg).await {
+                            tracing::error!("Errore durante invio direct a user_id {user_id}");
                             break;
                         }
+                    },
+                    None => {
+                        tracing::info!("Canale direct chiuso per user_id {user_id}");
+                        break;
                     }
-                    Err(e) => tracing::error!("Errore serializzazione JSON direct per user_id {user_id}: {e}"),
                 }
             }
 
@@ -270,11 +278,9 @@ async fn do_server_side_socket_operations(
             msg = broadcast_rx.recv() => {
                 match msg {
                     Ok(msg) => {
-                        if let Ok(msg_json) = serde_json::to_string(&msg) {
-                            if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                                tracing::warn!("Client disconnesso durante invio broadcast a user_id {user_id}");
-                                break;
-                            }
+                        if !send_server_message(&mut ws_sender, &msg).await {
+                            tracing::error!("Errore durante invio broadcast a user_id {user_id}");
+                            break;
                         }
                     }
                     Err(RecvError::Lagged(skipped)) => {
@@ -291,10 +297,14 @@ async fn do_server_side_socket_operations(
 
     if !trip_finished {
         if let Some(summary) = state.finish_trip(user_id).await {
-            println!(
+            let msg = format!(
                 "Riepilogo user_id {user_id}: {} punti, {}s in movimento, {}s fermo",
-                summary.points_received, summary.moving_seconds, summary.stopped_seconds
+                summary.points_received, 
+                summary.moving_seconds, 
+                summary.stopped_seconds
             );
+            println!("{}", msg);
+            tracing::info!("{}", msg);
         }
     }
 
@@ -309,7 +319,7 @@ where
     let json = match serde_json::to_string(message) {
         Ok(json) => json,
         Err(error) => {
-            println!("Errore durante la serializzazione della risposta: {error}");
+            tracing::error!("Errore durante la serializzazione della risposta: {error}");
             return false;
         }
     };
