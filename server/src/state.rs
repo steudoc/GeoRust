@@ -49,6 +49,24 @@ pub async fn initialize_database(db: &SqlitePool) -> Result<(), sqlx::Error> {
     .execute(db)
     .await?;
 
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id INTEGER, -- NULL per i messaggi inviati dal server
+            recipient_id INTEGER, -- NULL per i messaggi broadcast
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            is_read INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (recipient_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+        "#
+    )
+    .execute(db)
+    .await?;
+
     Ok(())
 }
 
