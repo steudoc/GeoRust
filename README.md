@@ -5,6 +5,12 @@ Workspace Cargo con 3 crate:
 - `server`: backend
 - `client`: client dimostrativo (registrazione, invio posizione, messaggi)
 
+Utenti di esempio:
+- Username: user1<br>
+  Password: user1
+- Username: user2<br>
+  Password: user2
+
 ## Come avviare
 
 ```bash
