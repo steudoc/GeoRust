@@ -3,17 +3,20 @@ mod auth;
 mod info;
 mod state;
 mod stats;
+mod messaging;
 #[cfg_attr(not(test), allow(dead_code))]
 mod trip;
 
 use chrono::Utc;
 use common::{
-    WsClientMessage::{self, Text},
+    WsClientMessage::{self, DirectTextAck, Text},
     WsServerMessage,
 };
+
+
+use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::SqlitePoolOptions;
-use std::sync::Arc;
 
 use crate::state::{AppState, initialize_database};
 
@@ -31,7 +34,7 @@ use axum::{
 };
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
-use tokio::sync::mpsc;
+use tokio::sync::broadcast::error::RecvError;
 use tracing_appender::rolling;
 
 #[tokio::main]
@@ -81,13 +84,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/*
-// Handler che intercetta la richiesta di upgrade a WebSocket
-#[derive(Deserialize)]
-struct WsQuery {
-    token: String,
-}*/
+// ============================================================================
+// WEBSOCKET
+// ============================================================================
 
+/// Handler per la connessione WebSocket. 
+/// Verifica il token e, se valido, promuove la connessione a WebSocket.
 async fn ws_handler(
     State(state): State<Arc<AppState>>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
@@ -109,40 +111,54 @@ async fn ws_handler(
         .into_response()
 }
 
-// Gestisce la connessione una volta "promossa" a WebSocket
-async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state: Arc<AppState>) {
+/// Gestisce la connessione una volta "promossa" a WebSocket.
+/// Effettua il loop di ricezione dei messaggi dal client e l'invio di messaggi diretti e broadcast.
+async fn do_server_side_socket_operations(
+    socket: WebSocket, 
+    user_id: i64,
+    state: Arc<AppState>
+) {
     tracing::info!("Client connesso: user_id = {user_id}");
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Canale MPSC per i messaggi diretti a questo client
-    let (direct_tx, mut direct_rx) = mpsc::channel::<WsServerMessage>(100);
-
-    state.register_client(user_id, direct_tx.clone()).await;
+    // Crezione del canale MPSC per i messaggi diretti
+    let mut direct_rx = state.message_service.add_client(user_id).await;
 
     state.start_trip(user_id).await;
 
     // Iscrizione al canale BROADCAST globale
-    let mut broadcast_rx = state.register_broadcast();
+    let mut broadcast_rx = state.message_service.subscribe_broadcast();
 
     let mut trip_finished = false;
     let mut close_after_response = false;
+    
+    // Invio automatico messaggi pendenti non letti
+    if let Ok(unread_msgs) = state.message_service.get_unread_messages(user_id).await {
+        for msg in unread_msgs {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                let _ = ws_sender.send(Message::Text(json)).await;
+            }
+        }
+    }
 
     loop {
         tokio::select! {
-            // intanto ascolta anche eventuali messaggi/chiusura dal client
+            // Handle messaggi in arrivo dal client sulla connessione WebSocket
             incoming = ws_receiver.next() => {
-                //TODO: here is the listening mechanism. For now we just print the messages received from the client and the customer name.
-                //In the future we will use this channel to receive messages from the client and make actions from the server accordingly.
                 match incoming {
-                    Some(Ok(Message::Close(_))) | None => {
-                        tracing::info!("Connessione chiusa dal client");
-                        break;
-                    }
+                    Some(Ok(Message::Close(_))) | None => break, // client disconnesso
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
-                            Ok(Text { text, timestamp }) => {
-                              println!("Messaggio ricevuto da user_id {user_id}: {text} alle {timestamp}");
+                            Ok(Text { text: msg_text }) => {
+                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await {
+                                    let err_msg = err.to_client_message();
+                                    let _ = ws_sender.send(Message::Text(serde_json::to_string(&err_msg).unwrap())).await;
+                                }
+                            },
+                            Ok(DirectTextAck { id }) => {
+                                if let Err(e) = state.message_service.acknowledge_message(user_id, id).await {
+                                    tracing::error!("Errore ACK per user_id {user_id}: {:?}", e);                                }
                             },
                             Ok(WsClientMessage::PositionUpdate { coordinata, elapsed_seconds }) => {
                                 let response = match state.record_position(user_id, coordinata, elapsed_seconds).await {
@@ -163,7 +179,7 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                                 };
 
                                 if !send_server_message(&mut ws_sender, &response).await {
-                                    println!("Errore durante l'invio della risposta al client");
+                                    tracing::error!("Errore durante l'invio della risposta al client");
                                     break;
                                 }
                             }
@@ -190,7 +206,7 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                                                 }
                                             }
                                             Err(error) => {
-                                                println!(
+                                                tracing::error!(
                                                     "Impossibile salvare il tragitto di user_id {user_id}: {error}"
                                                 );
                                                 WsServerMessage::Error {
@@ -207,7 +223,7 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                                 };
 
                                 if !send_server_message(&mut ws_sender, &response).await {
-                                    println!("Errore durante l'invio della risposta al client");
+                                    tracing::error!("Errore durante l'invio della risposta al client");
                                     break;
                                 }
 
@@ -223,17 +239,15 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                                 };
 
                                 if !send_server_message(&mut ws_sender, &response).await {
-                                    println!("Errore durante l'invio della risposta al client");
+                                    tracing::error!("Errore durante l'invio della risposta al client");
                                     break;
                                 }
-                            }
+                            },
                         }
                     }
-                    Some(Ok(_)) => {
-                        tracing::debug!("Non text message received");
-                    }
+                    Some(Ok(_)) => tracing::warn!("Non text message received from user_id {user_id}"),
                     Some(Err(e)) => {
-                        tracing::error!("Errore sul socket: {e}");
+                        tracing::error!("Errore sul socket per user_id {user_id}: {e}");
                         break;
                     }
                 }
@@ -241,10 +255,14 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
 
             // Handle messaggi diretti
             Some(msg) = direct_rx.recv() => {
-                let msg_json = serde_json::to_string(&msg).unwrap();
-                if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                    println!("Client disconnesso durante invio direct, chiudo il loop");
-                    break;
+                match serde_json::to_string(&msg) {
+                    Ok(msg_json) => {
+                        if ws_sender.send(Message::Text(msg_json)).await.is_err() {
+                            tracing::warn!("Client disconnesso durante invio direct a user_id {user_id}");
+                            break;
+                        }
+                    }
+                    Err(e) => tracing::error!("Errore serializzazione JSON direct per user_id {user_id}: {e}"),
                 }
             }
 
@@ -252,14 +270,18 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
             msg = broadcast_rx.recv() => {
                 match msg {
                     Ok(msg) => {
-                        let msg_json = serde_json::to_string(&msg).unwrap();
-                        if ws_sender.send(Message::Text(msg_json)).await.is_err() {
-                            tracing::warn!("Client disconnesso durante invio direct/broadcast, chiudo il loop");
-                            break;
+                        if let Ok(msg_json) = serde_json::to_string(&msg) {
+                            if ws_sender.send(Message::Text(msg_json)).await.is_err() {
+                                tracing::warn!("Client disconnesso durante invio broadcast a user_id {user_id}");
+                                break;
+                            }
                         }
                     }
-                    Err(e) => {
-                        tracing::error!("Errore nel ricevere broadcast: {e}");
+                    Err(RecvError::Lagged(skipped)) => {
+                        tracing::warn!("Client {user_id} in ritardo, persi {skipped} messaggi broadcast");
+                    }
+                    Err(RecvError::Closed) => {
+                        tracing::info!("Canale broadcast chiuso per user_id {user_id}");
                         break;
                     }
                 }
@@ -276,8 +298,8 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
         }
     }
 
-    state.unregister_client(user_id).await;
-    println!("Client disconnesso: user_id = {user_id}");
+    state.message_service.remove_client(user_id).await;
+    tracing::info!("Client disconnesso: user_id = {user_id}");
 }
 
 async fn send_server_message<S>(sender: &mut S, message: &WsServerMessage) -> bool
