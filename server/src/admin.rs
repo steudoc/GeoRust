@@ -1,8 +1,14 @@
-use sqlx::SqlitePool;
-use tokio::io::{self, AsyncBufReadExt, BufReader};
+use std::sync::Arc;
 
-// Importiamo il modulo stats
+use tokio::io::{
+    self, 
+    AsyncBufReadExt, 
+    BufReader
+};
+
+use crate::messaging::MessageError;
 use crate::stats;
+use crate::AppState;
 
 // helper per stampare il menu in modo pulito
 fn print_help() {
@@ -19,7 +25,8 @@ fn print_help() {
     println!("============================================================");
 }
 
-pub async fn start_admin_console(db_pool: SqlitePool) {
+pub async fn start_admin_console(state: Arc<AppState>) {
+    let db_pool = state.db.clone();
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin).lines();
 
@@ -111,13 +118,23 @@ pub async fn start_admin_console(db_pool: SqlitePool) {
                                 if let Ok(user_id) = parts[2].parse::<i64>() {
                                     // Ricostruiamo il messaggio unendo le parole rimanenti
                                     let text = parts[3..].join(" ");
-                                    println!(
-                                        "[TODO] Invio messaggio '{}' all'utente {}.",
-                                        text, user_id
-                                    );
-                                    println!(
-                                        "Suggerimento: usa il canale mpsc specifico dell'utente salvato in AppState."
-                                    );
+
+                                    let time_str = chrono::Utc::now().format("%H:%M:%S");
+                                
+                                    let msg_id = state.message_service.send_admin_direct_message(user_id, &text).await;
+                                    match msg_id {
+                                        Ok(id) => println!("OK #{} [Direct -> {} {}] {}", id, user_id, time_str, text),
+                                        Err(MessageError::NotFound(reason)) => {
+                                            println!("Invio fallito. Utente #{user_id} non trovato: {reason}");
+                                        }
+                                        Err(MessageError::DatabaseError(e)) => {
+                                            tracing::error!("Errore DB console admin: {e}");
+                                            println!("Invio fallito. Si è verificato un errore imprevisto.");
+                                        }
+                                        Err(MessageError::ValidationError(msg)) => {
+                                            println!("Invio fallito. Messaggio non valido: {msg}");
+                                        }
+                                    }
                                 } else {
                                     println!("Errore: user_id deve essere un intero.");
                                 }
@@ -129,10 +146,23 @@ pub async fn start_admin_console(db_pool: SqlitePool) {
                             if parts.len() >= 3 {
                                 // Ricostruiamo il messaggio
                                 let text = parts[2..].join(" ");
-                                println!("[TODO] Invio broadcast: '{}'", text);
-                                println!(
-                                    "Suggerimento: usa il canale broadcast (tx) globale di AppState."
-                                );
+                                
+                                let time_str = chrono::Utc::now().format("%H:%M:%S");
+                                
+                                let msg_id = state.message_service.send_admin_broadcast_message(&text).await;
+                                match msg_id {
+                                    Ok(id) => println!("OK #{} [Broadcast {}] {}", id, time_str, text),
+                                    Err(MessageError::DatabaseError(e)) => {
+                                        tracing::error!("Errore DB console admin: {e}");
+                                        println!("Invio fallito. Si è verificato un errore imprevisto.");
+                                    }
+                                    Err(MessageError::ValidationError(msg)) => {
+                                        println!("Invio fallito. Messaggio non valido: {msg}");
+                                    }
+                                    _ => {
+                                        println!("Invio fallito. Si è verificato un errore imprevisto.");
+                                    }
+                                }
                             } else {
                                 println!("Usage: msg broadcast <testo del messaggio>");
                             }
