@@ -16,7 +16,8 @@ use common::{
 
 use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::str::FromStr;
 
 use crate::state::{AppState, initialize_database};
 
@@ -49,20 +50,24 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let db_url = format!("sqlite://{DB_PATH}?mode=rw"); // mode read/write
+
+    // Configura le opzioni di connessione al database SQLite
+    let connection_options = SqliteConnectOptions::from_str(&db_url)?
+        .foreign_keys(true);
+
+    // Crea un pool di connessioni al database SQLite
     let pool = SqlitePoolOptions::new()
         .max_connections(50)
-        .connect(&db_url)
+        .connect_with(connection_options)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Impossibile open {DB_PATH}: {e}\n\
-                "
-            )
-        })?;
+        .map_err(|e| anyhow::anyhow!("Impossibile aprire {db_url}: {e}"))?;
 
+    // Crea le tabelle del database se non esistono già
     initialize_database(&pool).await?;
 
     let state = AppState::new(pool.clone());
+
+    let admin_state = Arc::clone(&state);
 
     let app = Router::new()
         .route("/register", post(auth::register))
@@ -77,7 +82,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(info::start_cpu_logger());
 
     // setup della CLI amministratore
-    tokio::spawn(admin::start_admin_console(pool.clone()));
+    tokio::spawn(admin::start_admin_console(admin_state));
 
     axum::serve(listener, app).await?;
 
