@@ -98,7 +98,7 @@ impl MessageService {
         let timestamp = Utc::now();
 
         let id = self
-            .save_message(Some(user_id), Some(0), "client_to_server", trimmed, timestamp)
+            .save_message(Some(user_id), None, "client_to_server", trimmed, timestamp)
             .await?;
 
         println!(
@@ -126,7 +126,7 @@ impl MessageService {
 
         let now = Utc::now();
         let msg_id = self
-            .save_message(Some(0), Some(recipient_id), "direct", trimmed, now)
+            .save_message(None, Some(recipient_id), "direct", trimmed, now)
             .await?;
 
         let ws_msg = WsServerMessage::DirectText {
@@ -155,7 +155,7 @@ impl MessageService {
 
         let now = Utc::now();
         let msg_id = self
-            .save_message(Some(0), None, "broadcast", trimmed, now)
+            .save_message(None, None, "broadcast", trimmed, now)
             .await?;
 
         let ws_msg = WsServerMessage::BroadcastText {
@@ -293,7 +293,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(Some(0), Some(42), "direct", "Ciao Client 42", Utc::now())
+            .save_message(None, Some(42), "direct", "Ciao Client 42", Utc::now())
             .await
             .unwrap();
 
@@ -306,7 +306,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(Some(0), None, "broadcast", "Avviso generale", Utc::now())
+            .save_message(None, None, "broadcast", "Avviso generale", Utc::now())
             .await
             .unwrap();
 
@@ -319,7 +319,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(Some(42), Some(0), "client_to_server", "Messaggio client", Utc::now())
+            .save_message(Some(42), None, "client_to_server", "Messaggio client", Utc::now())
             .await
             .unwrap();
 
@@ -336,16 +336,16 @@ mod tests {
         let t3 = Utc::now() - chrono::Duration::seconds(10);
 
         let first_id = service
-            .save_message(Some(0), Some(42), "direct", "Primo messaggio", t1)
+            .save_message(None, Some(42), "direct", "Primo messaggio", t1)
             .await
             .unwrap();
         let second_id = service
-            .save_message(Some(0), Some(42), "direct", "Secondo messaggio", t2)
+            .save_message(None, Some(42), "direct", "Secondo messaggio", t2)
             .await
             .unwrap();
         service.mark_as_read(second_id, 42).await.unwrap();
         service
-            .save_message(Some(0), None, "broadcast", "Broadcast", t3)
+            .save_message(None, None, "broadcast", "Broadcast", t3)
             .await
             .unwrap();
 
@@ -367,7 +367,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(Some(0), Some(42), "direct", "Messaggio da confermare", Utc::now())
+            .save_message(None, Some(42), "direct", "Messaggio da confermare", Utc::now())
             .await
             .unwrap();
 
