@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use sqlx::Row;
 
 use tokio::io::{
     self, 
@@ -80,26 +81,62 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                 }
             }
 
-            // ---------------------------------------------------------
-            // COMANDI DA IMPLEMENTARE (MOCK)
-            // ---------------------------------------------------------
             "users" => {
-                println!("[TODO] Elenco utenti connessi.");
-                println!(
-                    "Suggerimento: qui dovrai accedere ad AppState per leggere la mappa degli utenti attivi."
-                );
-            }
+                let active_users = state.get_connected_users().await;
+
+                if active_users.is_empty() {
+                    println!("Nessun utente attualmente connesso.");
+                } else {
+                    println!("--------------------------------");
+                    println!("Utenti attualmente connessi ({}): ", active_users.len());
+                    for id in active_users {
+                        println!("  - User ID: {id}");
+                    }
+                    println!("--------------------------------");
+                }
+            }   
 
             "logs" => {
                 if parts.len() == 2 {
                     if let Ok(user_id) = parts[1].parse::<i64>() {
-                        println!(
-                            "[TODO] Estrazione degli ultimi log per l'utente {}.",
-                            user_id
-                        );
-                        println!(
-                            "Suggerimento: query su SQLite ordinata per timestamp decrescente (LIMIT 10)."
-                        );
+                        println!("Estrazione degli ultimi log per l'utente {user_id}...");
+                        
+                        let query_result = sqlx::query(
+                            r#"
+                            SELECT kind, content, created_at_ms 
+                            FROM messages 
+                            WHERE sender_id = ?1 OR recipient_id = ?1 
+                            ORDER BY created_at_ms DESC 
+                            LIMIT 10
+                            "#
+                        )
+                        .bind(user_id)
+                        .fetch_all(&db_pool)
+                        .await;
+
+                        match query_result {
+                            Ok(messages) if messages.is_empty() => {
+                                println!("Nessun messaggio trovato per l'utente {user_id}.");
+                            }
+                            Ok(messages) => {
+                                println!("--------------------------------");
+                                for row in messages {
+                                    let kind: String = row.get("kind");
+                                    let content: String = row.get("content");
+                                    let timestamp_ms: i64 = row.get("created_at_ms");
+                                    
+                                    // converte i millisecondi in una data formattata
+                                    let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                                        Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
+                                        None => timestamp_ms.to_string(),
+                                    };
+
+                                    println!("[{}] [{}] {}", time_str, kind.to_uppercase(), content);
+                                }
+                                println!("--------------------------------");
+                            }
+                            Err(e) => println!("Errore nel recupero dei log: {}", e),
+                        }
                     } else {
                         println!("Errore: user_id deve essere un numero intero.");
                     }

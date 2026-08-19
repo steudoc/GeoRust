@@ -215,6 +215,11 @@ impl AppState {
 
         Ok(trip_id)
     }
+    
+    pub async fn get_connected_users(&self) -> Vec<i64> {
+        let trips_guard = self.trips.read().await;
+        trips_guard.keys().copied().collect()
+    }
 }
 
 // ---------------------------------------------------------------------
