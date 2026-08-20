@@ -1,7 +1,7 @@
 mod movement;
 
-use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage, WsServerMessage};
 use chrono::Local;
+use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage, WsServerMessage};
 
 use futures_util::{
     Sink, SinkExt, Stream, StreamExt,
@@ -189,13 +189,13 @@ where
     let (route_sender, mut route_receiver) = mpsc::channel(16); // Creazione del canale tra simulatore e WebSocket di al massimo 16 punti non letti
     let simulator_task = tokio::spawn(simulator.start(route_sender)); // Avvio simulatore
     let mut route_finished = false; // tag per fine simulazione e inviare il messaggio di fine TripCompleted
-    
+
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    
+
     println!("Simple Console - Type 'help' for commands");
     print!("> ");
     io::stdout().flush()?;
-    
+
     loop {
         tokio::select! {
             // 1. Ricezione dal server WebSocket
@@ -236,7 +236,7 @@ where
 
                                 // Risposta automatica di ACK al server
                                 let ack_payload = serde_json::to_string(&WsClientMessage::DirectTextAck { id })?;
-                                let _ = write.send(Message::Text(ack_payload.into())).await;
+                                let _ = write.send(Message::Text(ack_payload)).await;
                             },
                             Ok(BroadcastText { id, text, timestamp }) => {
                                 let time_str = timestamp.with_timezone(&Local).format("%H:%M:%S");
@@ -279,16 +279,16 @@ where
                         };
                         let json = serde_json::to_string(&message)?;
 
-                        write.send(Message::Text(json.into())).await?;
+                        write.send(Message::Text(json)).await?;
                         print!("\rInviata posizione a t={}s\n> ", point.elapsed.as_secs()); // Mostriamo il tempo del CSV, non quello registrato dal server
                         io::stdout().flush()?;
                     }
                     None => {
                         // Simulatore ha terminato: distrutto Sender del canale
                         let json = serde_json::to_string(&WsClientMessage::TripCompleted)?;
-                        write.send(Message::Text(json.into())).await?;
+                        write.send(Message::Text(json)).await?;
                         route_finished = true;
-                        
+
                         print!("\rTutte le posizioni sono state inviate. In attesa del server...\n> ");
                         io::stdout().flush()?;
                     }
@@ -323,7 +323,7 @@ where
                             text: argument.to_string(),
                         })?;
 
-                        write.send(Message::Text(payload.into())).await?;
+                        write.send(Message::Text(payload)).await?;
                         println!("Messaggio inviato");
                     }
                     "exit" => {
@@ -339,7 +339,7 @@ where
                 print!("> ");
                 io::stdout().flush()?;
             }
-        }   
+        }
     }
 
     drop(route_receiver); // Chiusura esplicita lato ricevente così il simulatore non continuare a produrre punti

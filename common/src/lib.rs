@@ -35,8 +35,6 @@ pub enum UserState {
     Still,
 }
 
-
-
 // ---------------------------------------------------------------------
 // REST: Registrazione / Login
 // ---------------------------------------------------------------------
@@ -64,8 +62,6 @@ pub struct LoginResponse {
     pub token: String, // token facile da usare nelle req successive
 }
 
-
-
 // ---------------------------------------------------------------------
 // MOVIMENTO
 // ---------------------------------------------------------------------
@@ -78,8 +74,6 @@ pub struct MovementStats {
     pub total_pause: f64,
     pub avg_velocity: f64,
 }
-
-
 
 // ---------------------------------------------------------------------
 // WEBSOCKET: Messaggi Client -> Server
@@ -103,8 +97,7 @@ pub enum WsClientMessage {
                     */
     DirectTextAck {
         id: i64,
-    }
-    // Altri messaggi possono essere aggiunti qui
+    }, // Altri messaggi possono essere aggiunti qui
 }
 
 // ---------------------------------------------------------------------

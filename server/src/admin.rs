@@ -1,15 +1,11 @@
-use std::sync::Arc;
 use sqlx::Row;
+use std::sync::Arc;
 
-use tokio::io::{
-    self, 
-    AsyncBufReadExt, 
-    BufReader
-};
+use tokio::io::{self, AsyncBufReadExt, BufReader};
 
+use crate::AppState;
 use crate::messaging::MessageError;
 use crate::stats;
-use crate::AppState;
 
 // helper per stampare il menu in modo pulito
 fn print_help() {
@@ -94,13 +90,13 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                     }
                     println!("--------------------------------");
                 }
-            }   
+            }
 
             "logs" => {
                 if parts.len() == 2 {
                     if let Ok(user_id) = parts[1].parse::<i64>() {
                         println!("Estrazione degli ultimi log per l'utente {user_id}...");
-                        
+
                         let query_result = sqlx::query(
                             r#"
                             SELECT kind, content, created_at_ms 
@@ -108,7 +104,7 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                             WHERE sender_id = ?1 OR recipient_id = ?1 
                             ORDER BY created_at_ms DESC 
                             LIMIT 10
-                            "#
+                            "#,
                         )
                         .bind(user_id)
                         .fetch_all(&db_pool)
@@ -124,14 +120,24 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                                     let kind: String = row.get("kind");
                                     let content: String = row.get("content");
                                     let timestamp_ms: i64 = row.get("created_at_ms");
-                                    
-                                    // converte i millisecondi in una data formattata
-                                    let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-                                        Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
-                                        None => timestamp_ms.to_string(),
-                                    };
 
-                                    println!("[{}] [{}] {}", time_str, kind.to_uppercase(), content);
+                                    // converte i millisecondi in una data formattata
+                                    let time_str =
+                                        match chrono::DateTime::from_timestamp_millis(timestamp_ms)
+                                        {
+                                            Some(dt) => dt
+                                                .with_timezone(&chrono::Local)
+                                                .format("%d/%m/%Y %H:%M:%S")
+                                                .to_string(),
+                                            None => timestamp_ms.to_string(),
+                                        };
+
+                                    println!(
+                                        "[{}] [{}] {}",
+                                        time_str,
+                                        kind.to_uppercase(),
+                                        content
+                                    );
                                 }
                                 println!("--------------------------------");
                             }
@@ -157,16 +163,26 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                                     let text = parts[3..].join(" ");
 
                                     let time_str = chrono::Utc::now().format("%H:%M:%S");
-                                
-                                    let msg_id = state.message_service.send_admin_direct_message(user_id, &text).await;
+
+                                    let msg_id = state
+                                        .message_service
+                                        .send_admin_direct_message(user_id, &text)
+                                        .await;
                                     match msg_id {
-                                        Ok(id) => println!("OK #{} [Direct -> {} {}] {}", id, user_id, time_str, text),
+                                        Ok(id) => println!(
+                                            "OK #{} [Direct -> {} {}] {}",
+                                            id, user_id, time_str, text
+                                        ),
                                         Err(MessageError::NotFound(reason)) => {
-                                            println!("Invio fallito. Utente #{user_id} non trovato: {reason}");
+                                            println!(
+                                                "Invio fallito. Utente #{user_id} non trovato: {reason}"
+                                            );
                                         }
                                         Err(MessageError::DatabaseError(e)) => {
                                             tracing::error!("Errore DB console admin: {e}");
-                                            println!("Invio fallito. Si è verificato un errore imprevisto.");
+                                            println!(
+                                                "Invio fallito. Si è verificato un errore imprevisto."
+                                            );
                                         }
                                         Err(MessageError::ValidationError(msg)) => {
                                             println!("Invio fallito. Messaggio non valido: {msg}");
@@ -183,21 +199,30 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                             if parts.len() >= 3 {
                                 // Ricostruiamo il messaggio
                                 let text = parts[2..].join(" ");
-                                
+
                                 let time_str = chrono::Utc::now().format("%H:%M:%S");
-                                
-                                let msg_id = state.message_service.send_admin_broadcast_message(&text).await;
+
+                                let msg_id = state
+                                    .message_service
+                                    .send_admin_broadcast_message(&text)
+                                    .await;
                                 match msg_id {
-                                    Ok(id) => println!("OK #{} [Broadcast {}] {}", id, time_str, text),
+                                    Ok(id) => {
+                                        println!("OK #{} [Broadcast {}] {}", id, time_str, text)
+                                    }
                                     Err(MessageError::DatabaseError(e)) => {
                                         tracing::error!("Errore DB console admin: {e}");
-                                        println!("Invio fallito. Si è verificato un errore imprevisto.");
+                                        println!(
+                                            "Invio fallito. Si è verificato un errore imprevisto."
+                                        );
                                     }
                                     Err(MessageError::ValidationError(msg)) => {
                                         println!("Invio fallito. Messaggio non valido: {msg}");
                                     }
                                     _ => {
-                                        println!("Invio fallito. Si è verificato un errore imprevisto.");
+                                        println!(
+                                            "Invio fallito. Si è verificato un errore imprevisto."
+                                        );
                                     }
                                 }
                             } else {
