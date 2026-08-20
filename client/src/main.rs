@@ -1,6 +1,8 @@
 mod movement;
 
 use common::{LoginRequest, LoginResponse, RegisterRequest, WsClientMessage, WsServerMessage};
+use chrono::Local;
+
 use futures_util::{
     Sink, SinkExt, Stream, StreamExt,
     stream::{SplitSink, SplitStream},
@@ -10,12 +12,15 @@ use std::{
     io::{self, Write},
     path::{Path, PathBuf},
 };
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc; // Canale usato per mettere in comunicazione il simulatore RouteSimulator e la websocket
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
     tungstenite::{Message, client::IntoClientRequest},
 };
+
+use common::WsServerMessage::{BroadcastText, DirectText};
 
 const SERVER_HTTP: &str = "http://127.0.0.1:3000";
 const SERVER_WS: &str = "ws://127.0.0.1:3000/ws";
@@ -184,11 +189,16 @@ where
     let (route_sender, mut route_receiver) = mpsc::channel(16); // Creazione del canale tra simulatore e WebSocket di al massimo 16 punti non letti
     let simulator_task = tokio::spawn(simulator.start(route_sender)); // Avvio simulatore
     let mut route_finished = false; // tag per fine simulazione e inviare il messaggio di fine TripCompleted
-
+    
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    
+    println!("Simple Console - Type 'help' for commands");
+    print!("> ");
+    io::stdout().flush()?;
+    
     loop {
         tokio::select! {
-
-            // Ricezione dal server
+            // 1. Ricezione dal server WebSocket
             msg = read.next() => {
                 match msg {
                     /*
@@ -200,49 +210,65 @@ where
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsServerMessage>(&text) {
                             Ok(WsServerMessage::PositionAccepted { stato, coord_ricevute }) => {
-                                println!(
-                                    "Posizione {coord_ricevute} accettata; stato utente: {stato:?}"
-                                );
-                            }
+                                print!("\rPosizione {coord_ricevute} accettata; stato utente: {stato:?}\n> ");
+                                io::stdout().flush()?;
+                            },
                             Ok(WsServerMessage::TripCompleted {
                                 numero_coord,
                                 tempo_movimento,
                                 tempo_fermo,
                             }) => {
                                 println!(
-                                    "Tragitto completato: {numero_coord} punti, \
-                                     movimento {tempo_movimento}s, fermo {tempo_fermo}s"
+                                    "\rTragitto completato: {numero_coord} punti, movimento {tempo_movimento}s, fermo {tempo_fermo}s"
                                 );
                                 break;  // Termine loop websocket perché il client ha finito il lavoro -> UNICO punto di uscita
-                            }
+                            },
                             Ok(WsServerMessage::Error { code, message }) => {
                                 // Non interrompiamo il loop in caso di errore, restiamo collegati così da rifiutare una posizione errata senza abbattere la connessione
-                                eprintln!("Errore dal server [{code}]: {message}");
-                            }
-                            Ok(other) => println!("Aggiornamento ricevuto: {other:?}"), // Prr BroadcastText e DirectText
+                                //eprintln!("Errore dal server [{code}]: {message}");
+                                print!("\r[Errore {code}] {message}\n> ");
+                                io::stdout().flush()?;
+                            },
+                            Ok(DirectText { id, text, timestamp }) => {
+                                let time_str = timestamp.with_timezone(&Local).format("%H:%M:%S");
+                                print!("\r[Diretto #{id} {time_str}] {text}\n> ");
+                                io::stdout().flush()?;
+
+                                // Risposta automatica di ACK al server
+                                let ack_payload = serde_json::to_string(&WsClientMessage::DirectTextAck { id })?;
+                                let _ = write.send(Message::Text(ack_payload.into())).await;
+                            },
+                            Ok(BroadcastText { id, text, timestamp }) => {
+                                let time_str = timestamp.with_timezone(&Local).format("%H:%M:%S");
+                                print!("\r[Broadcast #{id} {time_str}] {text}\n> ");
+                                io::stdout().flush()?;
+                            },
+                            //Ok(other) => println!("Aggiornamento ricevuto: {other:?}"), // Prr BroadcastText e DirectText
                             Err(error) => {
                                 // Messaggio che non si può trasformare in WsServerMessage
-                                eprintln!("Risposta non valida dal server: {error}");
+                                //eprintln!("Risposta non valida dal server: {error}");
+                                print!("\risposta non valida dal server: {error}\n> ");
+                                io::stdout().flush()?;
                             }
                         }
-                    }
+                    },
                     Some(Ok(Message::Close(_))) => {
-                        println!("Server ha chiuso la connessione");
+                        println!("\rIl server ha chiuso la connessione.");
                         break;
-                    }
-                    Some(Ok(_)) => {}
+                    },
+                    Some(Ok(_)) => {},
                     Some(Err(e)) => {
-                        println!("Errore: {e}");
+                        println!("\rErrore di rete: {e}");
                         break;
-                    }
+                    },
                     None => {
-                        println!("Connessione chiusa");
+                        println!("\rConnessione terminata.");
                         break;
-                    }
+                    },
                 }
             }
 
-            // Ricezione dal simulatore e invio al server
+            // 2. Ricezione dal simulatore e invio delle posizioni al server
             point = route_receiver.recv(), if !route_finished => {
                 match point {
                     Some(point) => {
@@ -253,19 +279,67 @@ where
                         };
                         let json = serde_json::to_string(&message)?;
 
-                        write.send(Message::Text(json)).await?;
-                        println!("Inviata posizione a t={}s", point.elapsed.as_secs()); // Mostriamo il tempo del CSV, non quello registrato dal server
+                        write.send(Message::Text(json.into())).await?;
+                        print!("\rInviata posizione a t={}s\n> ", point.elapsed.as_secs()); // Mostriamo il tempo del CSV, non quello registrato dal server
+                        io::stdout().flush()?;
                     }
                     None => {
                         // Simulatore ha terminato: distrutto Sender del canale
                         let json = serde_json::to_string(&WsClientMessage::TripCompleted)?;
-                        write.send(Message::Text(json)).await?;
+                        write.send(Message::Text(json.into())).await?;
                         route_finished = true;
-                        println!("Tutte le posizioni sono state inviate");
+                        
+                        print!("\rTutte le posizioni sono state inviate. In attesa del server...\n> ");
+                        io::stdout().flush()?;
                     }
                 }
             }
-        }
+
+            // 3. Input dell'utente da stdin
+            line = lines.next_line() => {
+                let Some(line) = line? else {
+                    println!("Input chiuso");
+                    break;
+                };
+
+                let mut parts = line.trim().splitn(2, char::is_whitespace);
+                let command = parts.next().unwrap_or("");
+                let argument = parts.next().unwrap_or("").trim();
+
+                match command {
+                    "help" => {
+                        println!("Available commands:");
+                        println!("help - Show this help message");
+                        println!("msg <message> - Send a message to the server");
+                        println!("exit - Exit the console");
+                    }
+                    "msg" => {
+                        if argument.is_empty() {
+                            println!("Usage: msg <message>");
+                            continue;
+                        }
+
+                        let payload = serde_json::to_string(&WsClientMessage::Text {
+                            text: argument.to_string(),
+                        })?;
+
+                        write.send(Message::Text(payload.into())).await?;
+                        println!("Messaggio inviato");
+                    }
+                    "exit" => {
+                        println!("Exiting console...");
+                        break;
+                    }
+                    "" => {}
+                    _ => {
+                        println!("Unknown command: {command}");
+                    }
+                }
+
+                print!("> ");
+                io::stdout().flush()?;
+            }
+        }   
     }
 
     drop(route_receiver); // Chiusura esplicita lato ricevente così il simulatore non continuare a produrre punti

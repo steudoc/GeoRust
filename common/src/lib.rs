@@ -90,7 +90,7 @@ pub struct MovementStats {
 pub enum WsClientMessage {
     Text {
         text: String,
-        timestamp: DateTime<Utc>,
+        //timestamp: DateTime<Utc>,
     },
     PositionUpdate {
         coordinata: tracking::Coordinata,
@@ -101,6 +101,10 @@ pub enum WsClientMessage {
                    Invece che considerare la chiusura della WebSocket come fine del tragitto inviamo un messaggio esplicito, poiché
                    la chiusura della websocket potrebbe causarsi anche per altre ragioni, es. errore di rete, crash dell'applicativo, interruzioni improvvise del server o client
                     */
+    DirectTextAck {
+        id: i64,
+    }
+    // Altri messaggi possono essere aggiunti qui
 }
 
 // ---------------------------------------------------------------------
