@@ -206,7 +206,7 @@ async fn do_server_side_socket_operations(
                                                     summary.moving_seconds,
                                                     summary.stopped_seconds
                                                 );
-                                                println!("{}", msg);
+                                                //println!("{}", msg);
                                                 tracing::info!("{}", msg);
                                                 WsServerMessage::TripCompleted {
                                                     numero_coord: summary.points_received,
@@ -308,7 +308,7 @@ async fn do_server_side_socket_operations(
                 summary.moving_seconds, 
                 summary.stopped_seconds
             );
-            println!("{}", msg);
+            //println!("{}", msg);
             tracing::info!("{}", msg);
         }
     }

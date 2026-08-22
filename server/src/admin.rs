@@ -2,7 +2,7 @@ use std::{sync::Arc};
 use std::io;
 
 use crossterm::{
-    event::{Event, KeyCode, EventStream},
+    event::{Event, EventStream, KeyCode, KeyEventKind, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -10,11 +10,10 @@ use futures::StreamExt; // necessario per consumare l'eventStream
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
+    style::{Color, Style, Modifier},
+    widgets::{Block, Borders, Paragraph, List, ListItem},
     Terminal,
 };
-use crossterm::event::KeyEventKind;
 
 use crate::stats;
 use crate::AppState;
@@ -26,6 +25,9 @@ struct TuiState {
     logs: Vec<String>,
     should_quit: bool,
     app_state: Arc<AppState>,
+    scroll_offset: u16,
+    active_users: Vec<i64>,
+    recent_messages: Vec<String>,
 }
 impl TuiState {
     fn new(app_state: Arc<AppState>) -> Self {
@@ -36,11 +38,15 @@ impl TuiState {
                 "Digita 'help' per i comandi o 'exit' (o ESC) per uscire.".to_string(),
             ], 
             should_quit: false, 
-            app_state 
+            app_state,
+            scroll_offset: 0, 
+            active_users: Vec::new(),
+            recent_messages: Vec::new(),
         }
     }    
 
     async fn process_command(&mut self) {
+        self.scroll_offset = 0;
         let cmd = self.input.trim().to_string();
         self.input.clear();
 
@@ -232,66 +238,101 @@ impl TuiState {
         }
     }
 }
-/* 
-// helper per stampare il menu in modo pulito
-fn print_help() {
-    println!("============================================================");
-    println!("                  ADMIN CONSOLE COMMANDS                    ");
-    println!("============================================================");
-    println!("  stats <user_id> <day|week|month>  - Calcola le statistiche di movimento");
-    println!("  users                             - Elenca gli utenti attualmente connessi");
-    println!("  msg send <user_id> <testo>        - Invia un messaggio a uno specifico utente");
-    println!("  msg broadcast <testo>             - Invia un messaggio a tutti gli utenti");
-    println!("  logs <user_id>                    - Visualizza gli ultimi messaggi/GPS ricevuti");
-    println!("  clear                             - Pulisce lo schermo del terminale");
-    println!("  help                              - Mostra questo menu");
-    println!("============================================================");
-}*/
 
 // CORE ASINCRONO
 pub async fn start_admin_console(state: Arc<AppState>) {
     // setup iniziale del terminale
     enable_raw_mode().expect("Impossibile abilitare Raw Mode");
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).expect("Impossibile entrare nello schermo alternativo");
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).expect("Errore setup terminale");
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).expect("Impossibile creare il terminale");
 
     // inizializzazione dello stato
-    let mut tui_state = TuiState::new(state);
+    let mut tui_state = TuiState::new(state.clone());
     let mut reader = EventStream::new();
-    let mut tick_rate = tokio::time::interval(std::time::Duration::from_millis(500)); // timer  per animazioni e refresh dati in background
+    let mut tick_rate = tokio::time::interval(std::time::Duration::from_millis(1000)); // refresh ogni 1000 ms
 
     // event loop
     loop {
         //disenga l'interfaccia ad ogni ciclo
-        terminal.draw(|f| draw_ui(f, &tui_state)).expect("Errore di rendering");
+        terminal.draw(|f| draw_ui(f, &mut tui_state)).expect("Errore di rendering");
 
         tokio::select! {
             // risveglio periodico
             _ = tick_rate.tick() => {
-                // TODO: aggiornamento dati in real time
+                // estrazione utenti connessi
+                tui_state.active_users = state.get_connected_users().await;
+
+                // estrazione ultimi messaggi
+                let query_result = sqlx::query(
+                    r#"
+                    SELECT kind, content, sender_id, recipient_id 
+                    FROM messages 
+                    ORDER BY created_at_ms DESC 
+                    LIMIT 15
+                    "#
+                )
+                .fetch_all(&state.db)
+                .await;
+
+                if let Ok(rows) = query_result {
+                    use sqlx::Row;
+                    let mut msgs = Vec::new();
+                    for row in rows {
+                        let kind: String = row.get("kind");
+                        let content: String = row.get("content");
+                        let sender_id: Option<i64> = row.get("sender_id");
+                        let recipient_id: Option<i64> = row.get("recipient_id");
+                        
+                        let display_str = if kind == "broadcast" {
+                            // se sender_id è None, l'ha mandato l'Admin. Altrimenti l'ha mandato un utente.
+                            let sender_name = sender_id.map_or("Admin".to_string(), |id| format!("#{}", id));
+                            format!("📢 [{} -> All] {}", sender_name, content)
+                        } else {
+                            // messaggio diretto
+                            if sender_id.is_none() {
+                                // Mittente = Server (Admin)
+                                let recip = recipient_id.map_or("?".to_string(), |id| id.to_string());
+                                format!("📤 [To #{}] {}", recip, content)
+                            } else {
+                                // Mittente = Client (Utente)
+                                let sender = sender_id.unwrap();
+                                format!("📥 [From #{}] {}", sender, content)
+                            }
+                        };
+                        
+                        msgs.push(display_str);
+                    }
+                    tui_state.recent_messages = msgs;
+                }
             }
             // risveglio immediato alla pressione di un tasto
             Some(Ok(event)) = reader.next() => {
-                if let Event::Key(key) = event {
-                    if key.kind == KeyEventKind::Press {
-                        match key.code {
-                            KeyCode::Char(c) => {
-                                tui_state.input.push(c);
+                match event {
+                    Event::Key(key) => {
+                        if key.kind == KeyEventKind::Press {
+                            match key.code {
+                                KeyCode::Char(c) => { tui_state.input.push(c); }
+                                KeyCode::Backspace => { tui_state.input.pop(); }// Rimuove l'ultimo carattere
+                                KeyCode::Enter => { tui_state.process_command().await; }
+                                KeyCode::Esc => { tui_state.should_quit = true; }
+                                _ => {}
                             }
-                            KeyCode::Backspace => {
-                                tui_state.input.pop(); // Rimuove l'ultimo carattere
+                        }
+                    }
+                    Event::Mouse(mouse) => {
+                        match mouse.kind {
+                            MouseEventKind::ScrollUp => {
+                                tui_state.scroll_offset = tui_state.scroll_offset.saturating_add(3) // scorre 3 righe alla volta
                             }
-                            KeyCode::Enter => {
-                                tui_state.process_command().await;
-                            }
-                            KeyCode::Esc => {
-                                tui_state.should_quit = true;
+                            MouseEventKind::ScrollDown => {
+                                tui_state.scroll_offset = tui_state.scroll_offset.saturating_sub(3);
                             }
                             _ => {}
                         }
                     }
+                    _ => {}
                 }
             }
         }
@@ -303,255 +344,115 @@ pub async fn start_admin_console(state: Arc<AppState>) {
 
     // ripristino essenziale 
     disable_raw_mode().expect("Impossibile disabilitare Raw Mode");
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).expect("Impossibile uscire dallo schermo alternativo");
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).expect("Errore ripristino");
     terminal.show_cursor().expect("Impossibile mostrare il cursore");
 }
 
 // RENDER INTERFACCIA
-fn draw_ui(f: &mut ratatui::Frame, state: &TuiState) {
-    // divide lo schermo in due aree: 80% log, 20% input
-    let chunks = Layout::default()
+fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
+    // LAYOUT PRINCIPALE: header, centro, footer
+    let main_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
-        .constraints(
-            [
-                Constraint::Min(5),    // Area Logs
-                Constraint::Length(3), // Area Input (sempre fissa a 3 righe di altezza)
-            ]
-            .as_ref(),
-        )
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Min(0),    // Main content
+            Constraint::Length(1), // Footer
+        ])
         .split(f.size());
 
-    // BLOCCO SUPERIORE: cronologia log
-    let logs_text = state.logs.join("\n");
-    let line_count = state.logs.len() as u16;
-    
-    // calcoliamo lo spazio effettivo: l'altezza del blocco meno 2 righe (bordo sopra e sotto)
-    let area_height = chunks[0].height.saturating_sub(2);
+    // LAYOUT CENTRALE: Console (75%) | Sidebar (25%)
+    let center_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
+        ])
+        .split(main_chunks[1]);
 
-    // Se abbiamo più righe dell'altezza dello schermo, calcoliamo l'offset
-    let scroll_offset = if line_count > area_height {
-        line_count - area_height
+    // LAYOUT CONSOLE (SINISTRA): logs, input
+    let left_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(0),    // Logs
+            Constraint::Length(3), // Input
+        ])
+        .split(center_chunks[0]);
+
+    // HEADER & FOOTER
+    let header = Paragraph::new(" GeoRust Admin Dashboard ")
+        .style(Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD));
+    f.render_widget(header, main_chunks[0]);
+
+    let footer = Paragraph::new(" [ESC] Esci | [help] Comandi ")
+        .style(Style::default().fg(Color::DarkGray));
+    f.render_widget(footer, main_chunks[2]);
+
+    // SPLIT DELLA SIDEBAR DESTRA
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(40), // 40% per gli utenti
+            Constraint::Percentage(60), // 60% per i messaggi
+        ])
+        .split(center_chunks[1]);
+
+    // UTENTI LIVE (alto destra)
+    let mut user_items = Vec::new();
+    if state.active_users.is_empty() {
+        user_items.push(ListItem::new("Nessuno online").style(Style::default().fg(Color::DarkGray)));
     } else {
-        0
+        for id in &state.active_users {
+            user_items.push(
+                ListItem::new(format!("🟢 User #{}", id))
+                    .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            );
+        }
+    }
+
+    let users_list = List::new(user_items)
+        .block(Block::default()
+            .title(format!(" Live Users ({}) ", state.active_users.len()))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan)));
+    f.render_widget(users_list, right_chunks[0]);
+
+    // MESSAGGI RECENTI (basso destra) con word wrap
+    let msg_text = if state.recent_messages.is_empty() {
+        "Nessun messaggio".to_string()
+    } else {
+        state.recent_messages.join("\n")
     };
 
+    let msg_paragraph = Paragraph::new(msg_text)
+        .block(Block::default()
+            .title(" Recent Messages ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta)))
+        .wrap(ratatui::widgets::Wrap { trim: true });
+    f.render_widget(msg_paragraph, right_chunks[1]);
+
+    // LOGS (Centro Sinistra)
+    let logs_text = state.logs.join("\n");
+    let line_count = state.logs.len() as u16;
+    let area_height = left_chunks[0].height.saturating_sub(2);
+    
+    let max_base_offset = if line_count > area_height { line_count - area_height } else { 0 };
+    state.scroll_offset = state.scroll_offset.min(max_base_offset);
+    let actual_scroll = max_base_offset - state.scroll_offset;
+
+    let title = " Console ".to_string();
     let logs_block = Paragraph::new(logs_text)
-        .block(Block::default().title(" Risultati Console ").borders(Borders::ALL))
-        // Diciamo a Ratatui di scrollare verso il basso dell'offset calcolato
-        .scroll((scroll_offset, 0)); 
+        .block(Block::default().title(title).borders(Borders::ALL))
+        .scroll((actual_scroll, 0)); 
+    f.render_widget(logs_block, left_chunks[0]);
 
-    f.render_widget(logs_block, chunks[0]);
-
-    // BLOCCO INFERIORE: riga di comando interattiva
+    // INPUT (Basso Sinistra)
     let input_text = format!("> {}", state.input);
     let input_block = Paragraph::new(input_text)
         .style(Style::default().fg(Color::Yellow))
-        .block(Block::default().title(" Inserisci Comando ").borders(Borders::ALL));
-    f.render_widget(input_block, chunks[1]);
+        .block(Block::default()
+            .title(" Invia Comando ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow)));
+    f.render_widget(input_block, left_chunks[1]);
 }
-
-/* 
-pub async fn start_admin_console(state: Arc<AppState>) {
-    let db_pool = state.db.clone();
-    let stdin = io::stdin();
-    let mut reader = BufReader::new(stdin).lines();
-
-    // stampa del menu
-    print!("\x1B[2J\x1B[1;1H");
-    println!("Admin console ready.");
-    print_help();
-
-    while let Ok(Some(line)) = reader.next_line().await {
-        let input = line.trim();
-        if input.is_empty() {
-            continue;
-        }
-
-        let parts: Vec<&str> = input.split_whitespace().collect();
-        let command = parts[0];
-
-        match command {
-            "stats" => {
-                if parts.len() == 3 {
-                    if let Ok(user_id) = parts[1].parse::<i64>() {
-                        let interval = parts[2];
-                        if !["day", "week", "month"].contains(&interval) {
-                            println!("Errore: il periodo deve essere 'day', 'week' o 'month'");
-                            continue;
-                        }
-
-                        println!(
-                            "Calculating stats for user {} in period {}...",
-                            user_id, interval
-                        );
-
-                        match stats::calculate_user_stats(&db_pool, user_id, interval).await {
-                            Ok(res) => {
-                                println!("--------------------------------");
-                                println!("User id:\t\t{}", user_id);
-                                println!("Period:\t\t\t{}", res.period);
-                                println!("Distance:\t\t{:.2} km", res.distance); // Aggiunta unità di misura
-                                println!("Total time:\t\t{:.2} s", res.total_time);
-                                println!("Total pause time:\t{:.2} s", res.total_pause);
-                                println!("Average velocity:\t{:.2} km/h", res.avg_velocity);
-                                println!("--------------------------------");
-                            }
-                            Err(e) => println!("Error in db data extraction: {}", e),
-                        }
-                    } else {
-                        println!("Errore: user_id deve essere un numero intero.");
-                    }
-                } else {
-                    println!("Usage: stats <user_id> <day|week|month>");
-                }
-            }
-
-            "users" => {
-                let active_users = state.get_connected_users().await;
-
-                if active_users.is_empty() {
-                    println!("Nessun utente attualmente connesso.");
-                } else {
-                    println!("--------------------------------");
-                    println!("Utenti attualmente connessi ({}): ", active_users.len());
-                    for id in active_users {
-                        println!("  - User ID: {id}");
-                    }
-                    println!("--------------------------------");
-                }
-            }   
-
-            "logs" => {
-                if parts.len() == 2 {
-                    if let Ok(user_id) = parts[1].parse::<i64>() {
-                        println!("Estrazione degli ultimi log per l'utente {user_id}...");
-                        
-                        let query_result = sqlx::query(
-                            r#"
-                            SELECT kind, content, created_at_ms 
-                            FROM messages 
-                            WHERE sender_id = ?1 OR recipient_id = ?1 
-                            ORDER BY created_at_ms DESC 
-                            LIMIT 10
-                            "#
-                        )
-                        .bind(user_id)
-                        .fetch_all(&db_pool)
-                        .await;
-
-                        match query_result {
-                            Ok(messages) if messages.is_empty() => {
-                                println!("Nessun messaggio trovato per l'utente {user_id}.");
-                            }
-                            Ok(messages) => {
-                                println!("--------------------------------");
-                                for row in messages {
-                                    let kind: String = row.get("kind");
-                                    let content: String = row.get("content");
-                                    let timestamp_ms: i64 = row.get("created_at_ms");
-                                    
-                                    // converte i millisecondi in una data formattata
-                                    let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-                                        Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
-                                        None => timestamp_ms.to_string(),
-                                    };
-
-                                    println!("[{}] [{}] {}", time_str, kind.to_uppercase(), content);
-                                }
-                                println!("--------------------------------");
-                            }
-                            Err(e) => println!("Errore nel recupero dei log: {}", e),
-                        }
-                    } else {
-                        println!("Errore: user_id deve essere un numero intero.");
-                    }
-                } else {
-                    println!("Usage: logs <user_id>");
-                }
-            }
-
-            "msg" => {
-                // Gestione dei sotto-comandi per "msg" (send o broadcast)
-                if parts.len() >= 2 {
-                    let sub_command = parts[1];
-                    match sub_command {
-                        "send" => {
-                            if parts.len() >= 4 {
-                                if let Ok(user_id) = parts[2].parse::<i64>() {
-                                    // Ricostruiamo il messaggio unendo le parole rimanenti
-                                    let text = parts[3..].join(" ");
-
-                                    let time_str = chrono::Utc::now().format("%H:%M:%S");
-                                
-                                    let msg_id = state.message_service.send_admin_direct_message(user_id, &text).await;
-                                    match msg_id {
-                                        Ok(id) => println!("OK #{} [Direct -> {} {}] {}", id, user_id, time_str, text),
-                                        Err(MessageError::NotFound(reason)) => {
-                                            println!("Invio fallito. Utente #{user_id} non trovato: {reason}");
-                                        }
-                                        Err(MessageError::DatabaseError(e)) => {
-                                            tracing::error!("Errore DB console admin: {e}");
-                                            println!("Invio fallito. Si è verificato un errore imprevisto.");
-                                        }
-                                        Err(MessageError::ValidationError(msg)) => {
-                                            println!("Invio fallito. Messaggio non valido: {msg}");
-                                        }
-                                    }
-                                } else {
-                                    println!("Errore: user_id deve essere un intero.");
-                                }
-                            } else {
-                                println!("Usage: msg send <user_id> <testo del messaggio>");
-                            }
-                        }
-                        "broadcast" => {
-                            if parts.len() >= 3 {
-                                // Ricostruiamo il messaggio
-                                let text = parts[2..].join(" ");
-                                
-                                let time_str = chrono::Utc::now().format("%H:%M:%S");
-                                
-                                let msg_id = state.message_service.send_admin_broadcast_message(&text).await;
-                                match msg_id {
-                                    Ok(id) => println!("OK #{} [Broadcast {}] {}", id, time_str, text),
-                                    Err(MessageError::DatabaseError(e)) => {
-                                        tracing::error!("Errore DB console admin: {e}");
-                                        println!("Invio fallito. Si è verificato un errore imprevisto.");
-                                    }
-                                    Err(MessageError::ValidationError(msg)) => {
-                                        println!("Invio fallito. Messaggio non valido: {msg}");
-                                    }
-                                    _ => {
-                                        println!("Invio fallito. Si è verificato un errore imprevisto.");
-                                    }
-                                }
-                            } else {
-                                println!("Usage: msg broadcast <testo del messaggio>");
-                            }
-                        }
-                        _ => println!("Sotto-comando non valido. Usa 'send' o 'broadcast'."),
-                    }
-                } else {
-                    println!("Usage: msg <send|broadcast> ...");
-                }
-            }
-
-            // ---------------------------------------------------------
-            // UTILITIES
-            // ---------------------------------------------------------
-            "help" => print_help(),
-
-            "clear" => {
-                // Sequenza ANSI per pulire lo schermo e riportare il cursore in alto a sinistra
-                print!("\x1B[2J\x1B[1;1H");
-                println!("Console pulita. Digita 'help' per i comandi.");
-            }
-
-            _ => {
-                println!("Comando non riconosciuto. Digita 'help' per vedere la lista dei comandi.")
-            }
-        }
-    }
-}
-*/
