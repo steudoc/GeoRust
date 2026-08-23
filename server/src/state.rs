@@ -215,6 +215,11 @@ impl AppState {
 
         Ok(trip_id)
     }
+
+    pub async fn remove_trip(&self, user_id: UserId) {
+        let mut trips = self.trips.write().await;
+        trips.remove(&user_id);
+    }
     
     pub async fn get_connected_users(&self) -> Vec<i64> {
         let trips_guard = self.trips.read().await;

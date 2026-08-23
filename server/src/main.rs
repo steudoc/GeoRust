@@ -314,6 +314,7 @@ async fn do_server_side_socket_operations(
     }
 
     state.message_service.remove_client(user_id).await;
+    state.remove_trip(user_id).await;   // <-- add it right here
     tracing::info!("Client disconnesso: user_id = {user_id}");
 }
 
