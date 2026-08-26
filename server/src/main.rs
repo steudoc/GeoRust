@@ -199,7 +199,7 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
                                                     summary.moving_seconds,
                                                     summary.stopped_seconds
                                                 );
-                                                println!("{}", msg);
+                                                //println!("{}", msg);
                                                 tracing::info!("{}", msg);
                                                 WsServerMessage::TripCompleted {
                                                     numero_coord: summary.points_received,
@@ -293,13 +293,17 @@ async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state
         }
     }
 
-    if !trip_finished && let Some(summary) = state.finish_trip(user_id).await {
-        let msg = format!(
-            "Riepilogo user_id {user_id}: {} punti, {}s in movimento, {}s fermo",
-            summary.points_received, summary.moving_seconds, summary.stopped_seconds
-        );
-        println!("{}", msg);
-        tracing::info!("{}", msg);
+    if !trip_finished {
+        if let Some(summary) = state.finish_trip(user_id).await {
+            let msg = format!(
+                "Riepilogo user_id {user_id}: {} punti, {}s in movimento, {}s fermo",
+                summary.points_received, 
+                summary.moving_seconds, 
+                summary.stopped_seconds
+            );
+            //println!("{}", msg);
+            tracing::info!("{}", msg);
+        }
     }
 
     state.message_service.remove_client(user_id).await;
