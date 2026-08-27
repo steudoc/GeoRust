@@ -81,10 +81,16 @@ async fn main() -> anyhow::Result<()> {
     // Lancia il logger della CPU in background
     tokio::spawn(info::start_cpu_logger());
 
-    // setup della CLI amministratore
-    tokio::spawn(admin::start_admin_console(admin_state));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
 
-    axum::serve(listener, app).await?;
+    // setup della CLI amministratore
+    tokio::spawn(admin::start_admin_console(admin_state, shutdown_tx));
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            let _ = shutdown_rx.await;
+        })
+        .await?;
 
     Ok(())
 }
