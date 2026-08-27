@@ -136,6 +136,8 @@ impl MessageService {
             ));
         }
 
+        let recipient_id = self.get_recipient_id_by_username(recipient_username).await?;
+
         let now = Utc::now();
         let msg_id = self
             .save_message(None, Some(recipient_id), "direct", trimmed, now)
@@ -275,6 +277,28 @@ impl MessageService {
 
         Ok(unread)
     }
+
+    async fn get_recipient_id_by_username(&self, username: &str) -> Result<i64, MessageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id
+            FROM users
+            WHERE username = ?1
+            "#,
+        )
+        .bind(username)
+        .fetch_optional(&self.db)
+        .await?;
+
+        if let Some(row) = row {
+            Ok(row.get("id"))
+        } else {
+            Err(MessageError::NotFound(format!(
+                "Utente con username '{}' non trovato",
+                username
+            )))
+        }
+    }
 }
 
 // ============================================================================
@@ -301,6 +325,13 @@ mod tests {
                 is_read INTEGER NOT NULL DEFAULT 0,
                 created_at_ms INTEGER NOT NULL
             );
+
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE
+            );
+
+            INSERT INTO users (username) VALUES ('user1'), ('user2'), ('user3');
             "#,
         )
         .execute(&pool)
@@ -316,7 +347,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(None, Some(42), "direct", "Ciao Client 42", Utc::now())
+            .save_message(None, Some(1), "direct", "Ciao", Utc::now())
             .await
             .unwrap();
 
@@ -365,20 +396,20 @@ mod tests {
         let t3 = Utc::now() - chrono::Duration::seconds(10);
 
         let first_id = service
-            .save_message(None, Some(42), "direct", "Primo messaggio", t1)
+            .save_message(None, Some(1), "direct", "Primo messaggio", t1)
             .await
             .unwrap();
         let second_id = service
-            .save_message(None, Some(42), "direct", "Secondo messaggio", t2)
+            .save_message(None, Some(1), "direct", "Secondo messaggio", t2)
             .await
             .unwrap();
-        service.mark_as_read(second_id, 42).await.unwrap();
+        service.mark_as_read(second_id, 1).await.unwrap();
         service
             .save_message(None, None, "broadcast", "Broadcast", t3)
             .await
             .unwrap();
 
-        let unread = service.get_unread_messages(42).await.unwrap();
+        let unread = service.get_unread_messages(1).await.unwrap();
 
         assert_eq!(unread.len(), 1);
         match &unread[0] {
@@ -406,9 +437,9 @@ mod tests {
             .await
             .unwrap();
 
-        service.acknowledge_message(42, id).await.unwrap();
+        service.acknowledge_message(1, id).await.unwrap();
 
-        let unread = service.get_unread_messages(42).await.unwrap();
+        let unread = service.get_unread_messages(1).await.unwrap();
         assert!(unread.is_empty());
     }
 
@@ -418,11 +449,11 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .send_admin_direct_message(77, "Messaggio admin offline")
+            .send_admin_direct_message("user1", "Messaggio admin offline")
             .await
             .unwrap();
 
-        let unread = service.get_unread_messages(77).await.unwrap();
+        let unread = service.get_unread_messages(1).await.unwrap();
         assert_eq!(unread.len(), 1);
         match &unread[0] {
             WsServerMessage::DirectText {
@@ -440,11 +471,11 @@ mod tests {
         let db = setup_in_memory_db().await;
         let service = MessageService::new(db);
 
-        let empty = service.handle_client_message(42, "   ").await;
+        let empty = service.handle_client_message(1, "   ").await;
         assert!(matches!(empty, Err(MessageError::ValidationError(_))));
 
         let long = "x".repeat(201);
-        let too_long = service.handle_client_message(42, &long).await;
+        let too_long = service.handle_client_message(1, &long).await;
         assert!(matches!(too_long, Err(MessageError::ValidationError(_))));
     }
 }
