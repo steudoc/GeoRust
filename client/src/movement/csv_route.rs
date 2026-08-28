@@ -51,7 +51,8 @@ fn load_route_from_reader<R: Read>(reader: R) -> Result<Vec<RoutePoint>> {
                 )
             })?;
 
-        if let Some(previous) = route.last() { // Prendiamo ultimo dato inserito per un controllo di validità sul tempo
+        if let Some(previous) = route.last() {
+            // Prendiamo ultimo dato inserito per un controllo di validità sul tempo
             let expected = previous
                 .elapsed
                 .checked_add(Duration::from_secs(POSITION_INTERVAL_SECONDS))
@@ -64,7 +65,8 @@ fn load_route_from_reader<R: Read>(reader: R) -> Result<Vec<RoutePoint>> {
                     elapsed.as_secs()
                 );
             }
-        } else if !elapsed.is_zero() { // Primo inserimento, deve essere 00:00
+        } else if !elapsed.is_zero() {
+            // Primo inserimento, deve essere 00:00
             bail!(
                 "Riga {line}: il primo punto deve avere tempo 00:00, ricevuti {} secondi",
                 elapsed.as_secs()

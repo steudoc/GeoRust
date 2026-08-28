@@ -127,8 +127,8 @@ impl TuiState {
                             FROM messages 
                             WHERE sender_id = ?1 OR recipient_id = ?1 
                             ORDER BY created_at_ms DESC 
-                            LIMIT 15
-                            "#
+                            LIMIT 10
+                            "#,
                         )
                         .bind(user_id)
                         .fetch_all(&self.app_state.db)

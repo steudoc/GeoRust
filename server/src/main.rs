@@ -1,9 +1,9 @@
 mod admin;
 mod auth;
 mod info;
+mod messaging;
 mod state;
 mod stats;
-mod messaging;
 #[cfg_attr(not(test), allow(dead_code))]
 mod trip;
 
@@ -13,11 +13,10 @@ use common::{
     WsServerMessage,
 };
 
-
-use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::state::{AppState, initialize_database};
 
@@ -52,8 +51,7 @@ async fn main() -> anyhow::Result<()> {
     let db_url = format!("sqlite://{DB_PATH}?mode=rw"); // mode read/write
 
     // Configura le opzioni di connessione al database SQLite
-    let connection_options = SqliteConnectOptions::from_str(&db_url)?
-        .foreign_keys(true);
+    let connection_options = SqliteConnectOptions::from_str(&db_url)?.foreign_keys(true);
 
     // Crea un pool di connessioni al database SQLite
     let pool = SqlitePoolOptions::new()
@@ -99,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
 // WEBSOCKET
 // ============================================================================
 
-/// Handler per la connessione WebSocket. 
+/// Handler per la connessione WebSocket.
 /// Verifica il token e, se valido, promuove la connessione a WebSocket.
 async fn ws_handler(
     State(state): State<Arc<AppState>>,
@@ -124,11 +122,7 @@ async fn ws_handler(
 
 /// Gestisce la connessione una volta "promossa" a WebSocket.
 /// Effettua il loop di ricezione dei messaggi dal client e l'invio di messaggi diretti e broadcast.
-async fn do_server_side_socket_operations(
-    socket: WebSocket, 
-    user_id: i64,
-    state: Arc<AppState>
-) {
+async fn do_server_side_socket_operations(socket: WebSocket, user_id: i64, state: Arc<AppState>) {
     tracing::info!("Client connesso: user_id = {user_id}");
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
@@ -143,7 +137,7 @@ async fn do_server_side_socket_operations(
 
     let mut trip_finished = false;
     let mut close_after_response = false;
-    
+
     // Invio automatico messaggi pendenti non letti
     if let Ok(unread_msgs) = state.message_service.get_unread_messages(user_id).await {
         for msg in unread_msgs {
@@ -162,12 +156,11 @@ async fn do_server_side_socket_operations(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text: msg_text }) => {
-                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await {
-                                    if !send_server_message(&mut ws_sender, &err.to_client_message()).await {
+                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await
+                                    && !send_server_message(&mut ws_sender, &err.to_client_message()).await {
                                         tracing::error!("Errore durante l'invio della risposta al client");
                                         break;
                                     }
-                                }
                             },
                             Ok(DirectTextAck { id }) => {
                                 if let Err(e) = state.message_service.acknowledge_message(user_id, id).await {
