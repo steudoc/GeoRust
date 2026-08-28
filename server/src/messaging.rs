@@ -2,8 +2,8 @@ use chrono::{DateTime, Local, Utc};
 use common::WsServerMessage;
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
+use tokio::sync::{broadcast, mpsc, RwLock};
 use thiserror::Error;
-use tokio::sync::{RwLock, broadcast, mpsc};
 
 // ============================================================================
 // MESSAGE ERRORS
@@ -81,11 +81,7 @@ impl MessageService {
         self.broadcast_tx.subscribe()
     }
 
-    pub async fn handle_client_message(
-        &self,
-        user_id: UserId,
-        text: &str,
-    ) -> Result<(), MessageError> {
+    pub async fn handle_client_message(&self, user_id: UserId, text: &str) -> Result<(), MessageError> {
         let trimmed = text.trim();
 
         if trimmed.is_empty() {
@@ -108,7 +104,7 @@ impl MessageService {
         println!(
             "{} [{}] user_{}: {}",
             timestamp.with_timezone(&Local).format("%H:%M:%S"),
-            format_args!("#{}", id),
+            format!("#{}", id),
             user_id,
             trimmed
         );
@@ -116,19 +112,11 @@ impl MessageService {
         Ok(())
     }
 
-    pub async fn acknowledge_message(
-        &self,
-        user_id: UserId,
-        message_id: i64,
-    ) -> Result<(), MessageError> {
+    pub async fn acknowledge_message(&self, user_id: UserId, message_id: i64) -> Result<(), MessageError> {
         self.mark_as_read(message_id, user_id).await
     }
 
-    pub async fn send_admin_direct_message(
-        &self,
-        recipient_id: i64,
-        content: &str,
-    ) -> Result<i64, MessageError> {
+    pub async fn send_admin_direct_message(&self, recipient_username: &str, content: &str) -> Result<i64, MessageError> {
         let trimmed = content.trim();
         if trimmed.is_empty() {
             return Err(MessageError::ValidationError(
@@ -152,11 +140,6 @@ impl MessageService {
         let clients = self.clients.read().await;
         if let Some(tx) = clients.get(&recipient_id) {
             let _ = tx.send(ws_msg).await;
-        } else {
-            println!(
-                "[Admin] Client {} non connesso (salvato come non letto).",
-                recipient_id
-            );
         }
 
         Ok(msg_id)
@@ -242,10 +225,7 @@ impl MessageService {
         Ok(())
     }
 
-    pub async fn get_unread_messages(
-        &self,
-        client_id: i64,
-    ) -> Result<Vec<WsServerMessage>, MessageError> {
+    pub async fn get_unread_messages(&self, client_id: i64) -> Result<Vec<WsServerMessage>, MessageError> {
         let rows = sqlx::query(
             r#"
             SELECT id, content, created_at_ms
@@ -264,14 +244,9 @@ impl MessageService {
                 let id: i64 = r.get("id");
                 let content: String = r.get("content");
                 let created_at_ms: i64 = r.get("created_at_ms");
-                let timestamp =
-                    DateTime::from_timestamp_millis(created_at_ms).unwrap_or_else(Utc::now);
+                let timestamp = DateTime::from_timestamp_millis(created_at_ms).unwrap_or_else(Utc::now);
 
-                WsServerMessage::DirectText {
-                    id,
-                    text: content,
-                    timestamp,
-                }
+                WsServerMessage::DirectText { id, text: content, timestamp }
             })
             .collect();
 
@@ -373,13 +348,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(
-                Some(42),
-                None,
-                "client_to_server",
-                "Messaggio client",
-                Utc::now(),
-            )
+            .save_message(Some(1), None, "client_to_server", "Messaggio client", Utc::now())
             .await
             .unwrap();
 
@@ -427,13 +396,7 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(
-                None,
-                Some(42),
-                "direct",
-                "Messaggio da confermare",
-                Utc::now(),
-            )
+            .save_message(None, Some(1), "direct", "Messaggio da confermare", Utc::now())
             .await
             .unwrap();
 
@@ -456,9 +419,7 @@ mod tests {
         let unread = service.get_unread_messages(1).await.unwrap();
         assert_eq!(unread.len(), 1);
         match &unread[0] {
-            WsServerMessage::DirectText {
-                id: msg_id, text, ..
-            } => {
+            WsServerMessage::DirectText { id: msg_id, text, .. } => {
                 assert_eq!(*msg_id, id);
                 assert_eq!(text, "Messaggio admin offline");
             }
