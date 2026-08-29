@@ -101,14 +101,6 @@ impl MessageService {
             .save_message(Some(user_id), None, "client_to_server", trimmed, timestamp)
             .await?;
 
-        println!(
-            "{} [{}] user_{}: {}",
-            timestamp.with_timezone(&Local).format("%H:%M:%S"),
-            format!("#{}", id),
-            user_id,
-            trimmed
-        );
-
         Ok(())
     }
 
