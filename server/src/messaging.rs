@@ -1,4 +1,4 @@
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use common::WsServerMessage;
 use sqlx::{Row, SqlitePool};
 use std::collections::HashMap;
@@ -97,17 +97,9 @@ impl MessageService {
 
         let timestamp = Utc::now();
 
-        let id = self
+        let _id = self
             .save_message(Some(user_id), None, "client_to_server", trimmed, timestamp)
             .await?;
-
-        println!(
-            "{} [{}] user_{}: {}",
-            timestamp.with_timezone(&Local).format("%H:%M:%S"),
-            format!("#{}", id),
-            user_id,
-            trimmed
-        );
 
         Ok(())
     }
