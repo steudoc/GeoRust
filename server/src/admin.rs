@@ -14,6 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, List, ListItem},
     Terminal,
 };
+use sqlx::Row;
 
 use crate::stats;
 use crate::AppState;
@@ -60,24 +61,39 @@ impl TuiState {
             "help" => {
                 self.logs.push("Comandi disponibili: stats, users, msg, logs, clear, exit".to_string());
             }
-
             "clear" => {
                 self.logs.clear();
             }
-
             "exit" | "quit" => {
                 self.should_quit = true;
             }
 
             // USERS
             "users" => {
-                let active_users = self.app_state.get_connected_users().await;
-                if active_users.is_empty() {
-                    self.logs.push("Nessun utente attualmente connesso.".to_string());
-                } else {
-                    self.logs.push(format!("Utenti connessi ({}):", active_users.len()));
-                    for id in active_users {
-                        self.logs.push(format!("  - User ID: {}", id));
+                self.logs.push("Estrazione utenti...".to_string());
+
+                let query_result = sqlx::query("SELECT id, username FROM users ORDER BY id ASC")
+                    .fetch_all(&self.app_state.db)
+                    .await;
+
+                match query_result {
+                    Ok(users) => {
+                        if users.is_empty() {
+                            self.logs.push("Nessun utente trovato.".to_string());
+                        } else {
+                            self.logs.push("--------------------------------".to_string());
+                            self.logs.push(format!("Utenti registrati ({}):", users.len()));
+                            for row in users {
+                                let id: i64 = row.get("id");
+                                let username: String = row.get("username");
+                                self.logs.push(format!("  - User ID: {}, Username: {}", id, username));
+                            }
+                            self.logs.push("--------------------------------".to_string());
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Errore DB: {}", e);
+                        self.logs.push(format!("Errore durante l'estrazione degli utenti."));
                     }
                 }
             }
@@ -118,64 +134,62 @@ impl TuiState {
             // LOGS
             "logs" => {
                 if parts.len() == 2 {
-                    if let Ok(user_id) = parts[1].parse::<i64>() {
-                        self.logs.push(format!("Estrazione ultimi log per l'utente {}...", user_id));
+                    let username = parts[1];
+                    
+                    self.logs.push(format!("Estrazione ultimi 10 log per l'utente '{}'...", username));
                         
-                        let query_result = sqlx::query(
-                            r#"
-                            SELECT kind, content, created_at_ms, is_read
-                            FROM messages 
-                            WHERE sender_id = ?1 OR recipient_id = ?1 
-                            ORDER BY created_at_ms DESC 
-                            LIMIT 15
-                            "#
-                        )
-                        .bind(user_id)
-                        .fetch_all(&self.app_state.db)
-                        .await;
+                    let query_result = sqlx::query(
+                        r#"
+                        SELECT kind, content, created_at_ms, is_read
+                        FROM messages m
+                        LEFT JOIN users u ON m.sender_id = u.id OR m.recipient_id = u.id
+                        WHERE u.username = ?1 AND (m.kind != 'broadcast')
+                        ORDER BY created_at_ms DESC 
+                        LIMIT 10
+                        "#
+                    )
+                    .bind(username)
+                    .fetch_all(&self.app_state.db)
+                    .await;
 
-                        match query_result {
-                            Ok(messages) if messages.is_empty() => {
-                                self.logs.push(format!("Nessun messaggio trovato per l'utente {}.", user_id));
-                            }
-                            Ok(messages) => {
-                                use sqlx::Row;
-                                self.logs.push("--------------------------------".to_string());
-                                for row in messages {
-                                    let kind: String = row.get("kind");
-                                    let content: String = row.get("content");
-                                    let timestamp_ms: i64 = row.get("created_at_ms");
-                                    let is_read: bool = row.get("is_read");
-                                    
-                                    let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-                                        Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
-                                        None => timestamp_ms.to_string(),
-                                    };
-
-                                    let kind = match kind.as_str() {
-                                        "direct" => "OUTBOUND",
-                                        "client_to_server" => "INBOUND",
-                                        "broadcast" => "BROADCAST",
-                                        _ => "UNKNOWN",
-                                    };
-
-                                    let read_status = match (kind, is_read) {
-                                        ("OUTBOUND", true) => " (READ)",
-                                        ("OUTBOUND", false) => " (PENDING)",
-                                        _ => "",
-                                    };
-
-                                    self.logs.push(format!("[{}] [{}] {}{}", time_str, kind.to_uppercase(), content, read_status));
-                                }
-                                self.logs.push("--------------------------------".to_string());
-                            }
-                            Err(e) => self.logs.push(format!("Errore log: {}", e)),
+                    match query_result {
+                        Ok(messages) if messages.is_empty() => {
+                            self.logs.push(format!("Nessun messaggio trovato per l'utente '{}'.", username));
                         }
-                    } else {
-                        self.logs.push("Errore: user_id deve essere intero.".to_string());
+                        Ok(messages) => {
+                            self.logs.push("--------------------------------".to_string());
+                            for row in messages {
+                                let kind: String = row.get("kind");
+                                let content: String = row.get("content");
+                                let timestamp_ms: i64 = row.get("created_at_ms");
+                                let is_read: bool = row.get("is_read");
+                                
+                                let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                                    Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
+                                    None => timestamp_ms.to_string(),
+                                };
+
+                                let kind = match kind.as_str() {
+                                    "direct" => "OUTBOUND",
+                                    "client_to_server" => "INBOUND",
+                                    "broadcast" => "BROADCAST",
+                                    _ => "UNKNOWN",
+                                };
+
+                                let read_status = match (kind, is_read) {
+                                    ("OUTBOUND", true) => " (READ)",
+                                    ("OUTBOUND", false) => " (PENDING)",
+                                    _ => "",
+                                };
+
+                                self.logs.push(format!("[{}] [{}] {}{}", time_str, kind.to_uppercase(), content, read_status));
+                            }
+                            self.logs.push("--------------------------------".to_string());
+                        }
+                        Err(e) => self.logs.push(format!("Errore log: {}", e)),
                     }
                 } else {
-                    self.logs.push("Usage: logs <user_id>".to_string());
+                    self.logs.push("Usage: logs <username>".to_string());
                 }
             }
 
@@ -320,11 +334,11 @@ pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync:
                             if sender.is_none() {
                                 // Inviato dall'Admin verso un Utente (Outbound)
                                 let recip_name = recipient.as_deref().unwrap_or("Sconosciuto");
-                                format!("📤 [{time_str}] [To {recip_name}] {content} {status_icon}")
+                                format!("📤 [{time_str}] [TO {recip_name}] {content} {status_icon}")
                             } else {
                                 // Inviato da un Utente verso l'Admin (Inbound)
                                 let sender_name = sender.as_deref().unwrap_or("Sconosciuto");
-                                format!("📥 [{time_str}] [From {sender_name}] {content}")
+                                format!("📥 [{time_str}] [FROM {sender_name}] {content}")
                             }
                         };
                         
