@@ -9,11 +9,12 @@ use crossterm::{
 use futures::StreamExt; // necessario per consumare l'eventStream
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Alignment},
     style::{Color, Style, Modifier},
     widgets::{Block, Borders, Paragraph, List, ListItem},
     Terminal,
 };
+use sqlx::Row;
 
 use crate::stats;
 use crate::AppState;
@@ -60,24 +61,39 @@ impl TuiState {
             "help" => {
                 self.logs.push("Comandi disponibili: stats, users, msg, logs, clear, exit".to_string());
             }
-
             "clear" => {
                 self.logs.clear();
             }
-
             "exit" | "quit" => {
                 self.should_quit = true;
             }
 
             // USERS
             "users" => {
-                let active_users = self.app_state.get_connected_users().await;
-                if active_users.is_empty() {
-                    self.logs.push("Nessun utente attualmente connesso.".to_string());
-                } else {
-                    self.logs.push(format!("Utenti connessi ({}):", active_users.len()));
-                    for id in active_users {
-                        self.logs.push(format!("  - User ID: {}", id));
+                self.logs.push("Estrazione utenti...".to_string());
+
+                let query_result = sqlx::query("SELECT id, username FROM users ORDER BY id ASC")
+                    .fetch_all(&self.app_state.db)
+                    .await;
+
+                match query_result {
+                    Ok(users) => {
+                        if users.is_empty() {
+                            self.logs.push("Nessun utente trovato.".to_string());
+                        } else {
+                            self.logs.push("--------------------------------".to_string());
+                            self.logs.push(format!("Utenti registrati ({}):", users.len()));
+                            for row in users {
+                                let id: i64 = row.get("id");
+                                let username: String = row.get("username");
+                                self.logs.push(format!("  - User ID: {}, Username: {}", id, username));
+                            }
+                            self.logs.push("--------------------------------".to_string());
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Errore DB: {}", e);
+                        self.logs.push(format!("Errore durante l'estrazione degli utenti."));
                     }
                 }
             }
@@ -118,50 +134,62 @@ impl TuiState {
             // LOGS
             "logs" => {
                 if parts.len() == 2 {
-                    if let Ok(user_id) = parts[1].parse::<i64>() {
-                        self.logs.push(format!("Estrazione ultimi log per l'utente {}...", user_id));
+                    let username = parts[1];
+                    
+                    self.logs.push(format!("Estrazione ultimi 10 log per l'utente '{}'...", username));
                         
-                        let query_result = sqlx::query(
-                            r#"
-                            SELECT kind, content, created_at_ms 
-                            FROM messages 
-                            WHERE sender_id = ?1 OR recipient_id = ?1 
-                            ORDER BY created_at_ms DESC 
-                            LIMIT 10
-                            "#
-                        )
-                        .bind(user_id)
-                        .fetch_all(&self.app_state.db)
-                        .await;
+                    let query_result = sqlx::query(
+                        r#"
+                        SELECT kind, content, created_at_ms, is_read
+                        FROM messages m
+                        LEFT JOIN users u ON m.sender_id = u.id OR m.recipient_id = u.id
+                        WHERE u.username = ?1 AND (m.kind != 'broadcast')
+                        ORDER BY created_at_ms DESC 
+                        LIMIT 10
+                        "#
+                    )
+                    .bind(username)
+                    .fetch_all(&self.app_state.db)
+                    .await;
 
-                        match query_result {
-                            Ok(messages) if messages.is_empty() => {
-                                self.logs.push(format!("Nessun messaggio trovato per l'utente {}.", user_id));
-                            }
-                            Ok(messages) => {
-                                use sqlx::Row;
-                                self.logs.push("--------------------------------".to_string());
-                                for row in messages {
-                                    let kind: String = row.get("kind");
-                                    let content: String = row.get("content");
-                                    let timestamp_ms: i64 = row.get("created_at_ms");
-                                    
-                                    let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-                                        Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
-                                        None => timestamp_ms.to_string(),
-                                    };
-
-                                    self.logs.push(format!("[{}] [{}] {}", time_str, kind.to_uppercase(), content));
-                                }
-                                self.logs.push("--------------------------------".to_string());
-                            }
-                            Err(e) => self.logs.push(format!("Errore log: {}", e)),
+                    match query_result {
+                        Ok(messages) if messages.is_empty() => {
+                            self.logs.push(format!("Nessun messaggio trovato per l'utente '{}'.", username));
                         }
-                    } else {
-                        self.logs.push("Errore: user_id deve essere intero.".to_string());
+                        Ok(messages) => {
+                            self.logs.push("--------------------------------".to_string());
+                            for row in messages {
+                                let kind: String = row.get("kind");
+                                let content: String = row.get("content");
+                                let timestamp_ms: i64 = row.get("created_at_ms");
+                                let is_read: bool = row.get("is_read");
+                                
+                                let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                                    Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
+                                    None => timestamp_ms.to_string(),
+                                };
+
+                                let kind = match kind.as_str() {
+                                    "direct" => "OUTBOUND",
+                                    "client_to_server" => "INBOUND",
+                                    "broadcast" => "BROADCAST",
+                                    _ => "UNKNOWN",
+                                };
+
+                                let read_status = match (kind, is_read) {
+                                    ("OUTBOUND", true) => " (READ)",
+                                    ("OUTBOUND", false) => " (PENDING)",
+                                    _ => "",
+                                };
+
+                                self.logs.push(format!("[{}] [{}] {}{}", time_str, kind.to_uppercase(), content, read_status));
+                            }
+                            self.logs.push("--------------------------------".to_string());
+                        }
+                        Err(e) => self.logs.push(format!("Errore log: {}", e)),
                     }
                 } else {
-                    self.logs.push("Usage: logs <user_id>".to_string());
+                    self.logs.push("Usage: logs <username>".to_string());
                 }
             }
 
@@ -171,29 +199,25 @@ impl TuiState {
                     match parts[1] {
                         "send" => {
                             if parts.len() >= 4 {
-                                if let Ok(user_id) = parts[2].parse::<i64>() {
-                                    let text = parts[3..].join(" ");
-                                    let time_str = chrono::Utc::now().format("%H:%M:%S");
-                                
-                                    let msg_id = self.app_state.message_service.send_admin_direct_message(user_id, &text).await;
-                                    match msg_id {
-                                        Ok(id) => self.logs.push(format!("OK #{} [Direct -> {} {}] {}", id, user_id, time_str, text)),
-                                        Err(MessageError::NotFound(reason)) => {
-                                            self.logs.push(format!("Invio fallito. Utente #{user_id} non trovato: {reason}"));
-                                        }
-                                        Err(MessageError::DatabaseError(e)) => {
-                                            tracing::error!("Errore DB: {e}");
-                                            self.logs.push("Invio fallito. Errore imprevisto.".to_string());
-                                        }
-                                        Err(MessageError::ValidationError(msg)) => {
-                                            self.logs.push(format!("Invio fallito. Msg non valido: {msg}"));
-                                        }
+                                let username = parts[2];
+                                let text = parts[3..].join(" ");
+                                let time_str = chrono::Utc::now().format("%H:%M:%S");
+                            
+                                match self.app_state.message_service.send_admin_direct_message(username, &text).await {
+                                    Ok(_) => self.logs.push(format!("[{time_str}] [OUTBOUND -> {username}] {text} (PENDING)")),
+                                    Err(MessageError::NotFound(reason)) => {
+                                        self.logs.push(format!("Invio fallito. {reason}"));
                                     }
-                                } else {
-                                    self.logs.push("Errore: user_id deve essere un intero.".to_string());
+                                    Err(MessageError::DatabaseError(e)) => {
+                                        tracing::error!("Errore DB: {e}");
+                                        self.logs.push("Invio fallito. Errore imprevisto.".to_string());
+                                    }
+                                    Err(MessageError::ValidationError(msg)) => {
+                                        self.logs.push(format!("Invio fallito. Messaggio non valido: {msg}"));
+                                    }
                                 }
                             } else {
-                                self.logs.push("Usage: msg send <user_id> <testo>".to_string());
+                                self.logs.push("Usage: msg send <username> <testo>".to_string());
                             }
                         }
                         "broadcast" => {
@@ -201,15 +225,14 @@ impl TuiState {
                                 let text = parts[2..].join(" ");
                                 let time_str = chrono::Utc::now().format("%H:%M:%S");
                                 
-                                let msg_id = self.app_state.message_service.send_admin_broadcast_message(&text).await;
-                                match msg_id {
-                                    Ok(id) => self.logs.push(format!("OK #{} [Broadcast {}] {}", id, time_str, text)),
+                                match self.app_state.message_service.send_admin_broadcast_message(&text).await {
+                                    Ok(_) => self.logs.push(format!("[{time_str}] [OUTBOUND -> BROADCAST] {text}")),
                                     Err(MessageError::DatabaseError(e)) => {
                                         tracing::error!("Errore DB: {e}");
                                         self.logs.push("Invio fallito. Errore imprevisto.".to_string());
                                     }
                                     Err(MessageError::ValidationError(msg)) => {
-                                        self.logs.push(format!("Invio fallito. Msg non valido: {msg}"));
+                                        self.logs.push(format!("Invio fallito. Messaggio non valido: {msg}"));
                                     }
                                     _ => {
                                         self.logs.push("Invio fallito. Errore imprevisto.".to_string());
@@ -240,7 +263,7 @@ impl TuiState {
 }
 
 // CORE ASINCRONO
-pub async fn start_admin_console(state: Arc<AppState>) {
+pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync::oneshot::Sender<()>) {
     // setup iniziale del terminale
     enable_raw_mode().expect("Impossibile abilitare Raw Mode");
     let mut stdout = io::stdout();
@@ -265,12 +288,22 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                 tui_state.active_users = state.get_connected_users().await;
 
                 // estrazione ultimi messaggi
+                // aggiunti i join per ottenere i nomi degli utenti mittente e destinatario
+                // aggiunto is_read per sapere se il messaggio è stato letto o meno
                 let query_result = sqlx::query(
                     r#"
-                    SELECT kind, content, sender_id, recipient_id 
-                    FROM messages 
-                    ORDER BY created_at_ms DESC 
-                    LIMIT 15
+                    SELECT 
+                        m.kind, 
+                        m.content, 
+                        m.created_at_ms, 
+                        m.is_read, 
+                        u_sender.username AS sender_name, 
+                        u_recip.username AS recipient_name
+                    FROM messages m
+                    LEFT JOIN users u_sender ON m.sender_id = u_sender.id
+                    LEFT JOIN users u_recip ON m.recipient_id = u_recip.id
+                    ORDER BY m.created_at_ms DESC 
+                    LIMIT 20
                     "#
                 )
                 .fetch_all(&state.db)
@@ -282,23 +315,30 @@ pub async fn start_admin_console(state: Arc<AppState>) {
                     for row in rows {
                         let kind: String = row.get("kind");
                         let content: String = row.get("content");
-                        let sender_id: Option<i64> = row.get("sender_id");
-                        let recipient_id: Option<i64> = row.get("recipient_id");
+                        let timestamp_ms: i64 = row.get("created_at_ms");
+                        let is_read: bool = row.get("is_read");
+                        let sender: Option<String> = row.get("sender_name");
+                        let recipient: Option<String> = row.get("recipient_name");
+
+                        let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                            Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
+                            None => "--/--/---- --:--:--".to_string(),
+                        };
                         
                         let display_str = if kind == "broadcast" {
-                            // se sender_id è None, l'ha mandato l'Admin. Altrimenti l'ha mandato un utente.
-                            let sender_name = sender_id.map_or("Admin".to_string(), |id| format!("#{}", id));
-                            format!("📢 [{} -> All] {}", sender_name, content)
+                            format!("📢 [{time_str}] [BROADCAST] {content}")
                         } else {
                             // messaggio diretto
-                            if sender_id.is_none() {
-                                // Mittente = Server (Admin)
-                                let recip = recipient_id.map_or("?".to_string(), |id| id.to_string());
-                                format!("📤 [To #{}] {}", recip, content)
+                            let status_icon = if is_read { "✔✔" } else { "✔" };
+
+                            if sender.is_none() {
+                                // Inviato dall'Admin verso un Utente (Outbound)
+                                let recip_name = recipient.as_deref().unwrap_or("Sconosciuto");
+                                format!("📤 [{time_str}] [TO {recip_name}] {content} {status_icon}")
                             } else {
-                                // Mittente = Client (Utente)
-                                let sender = sender_id.unwrap();
-                                format!("📥 [From #{}] {}", sender, content)
+                                // Inviato da un Utente verso l'Admin (Inbound)
+                                let sender_name = sender.as_deref().unwrap_or("Sconosciuto");
+                                format!("📥 [{time_str}] [FROM {sender_name}] {content}")
                             }
                         };
                         
@@ -338,14 +378,16 @@ pub async fn start_admin_console(state: Arc<AppState>) {
         }
 
         if tui_state.should_quit {
-            break;
+            // ripristino essenziale 
+            disable_raw_mode().expect("Impossibile disabilitare Raw Mode");
+            execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).expect("Errore ripristino");
+            terminal.show_cursor().expect("Impossibile mostrare il cursore");
+            
+            // invio segnale di shutdown al server
+            let _ = shutdown_tx.send(());
+            return;
         }
     }
-
-    // ripristino essenziale 
-    disable_raw_mode().expect("Impossibile disabilitare Raw Mode");
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).expect("Errore ripristino");
-    terminal.show_cursor().expect("Impossibile mostrare il cursore");
 }
 
 // RENDER INTERFACCIA
@@ -384,7 +426,7 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     f.render_widget(header, main_chunks[0]);
 
     let footer = Paragraph::new(" [ESC] Esci | [help] Comandi ")
-        .style(Style::default().fg(Color::DarkGray));
+        .alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, main_chunks[2]);
 
     // SPLIT DELLA SIDEBAR DESTRA
