@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use common::WsServerMessage;
 use sqlx::{Row, SqlitePool};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use tokio::sync::{broadcast, mpsc, RwLock};
 use thiserror::Error;
 
@@ -65,11 +65,26 @@ impl MessageService {
         }
     }
 
-    pub async fn add_client(&self, user_id: UserId) -> mpsc::Receiver<WsServerMessage> {
-        let (tx, rx) = mpsc::channel::<WsServerMessage>(100);
+    // Usiamo la mappa clients per tenere un registro di utenti già attivi ed evitare una seconda connessione di un utente già online.
+    // Impediamo una seconda riconnessione.
+    pub async fn add_client(&self, user_id: UserId) -> Option<mpsc::Receiver<WsServerMessage>> {
         let mut clients = self.clients.write().await;
-        clients.insert(user_id, tx);
-        rx
+
+        match clients.entry(user_id) {
+            Entry::Occupied(_) => None,
+            Entry::Vacant(entry) => {
+                let (tx, rx) = mpsc::channel(100);
+                entry.insert(tx);
+                Some(rx)
+            }
+        }
+    }
+
+    pub async fn connected_users(&self) -> Vec<UserId> {
+        let clients = self.clients.read().await;
+        let mut users: Vec<_> = clients.keys().copied().collect();
+        users.sort_unstable(); // ordinamento non stabile degli id
+        users
     }
 
     pub async fn remove_client(&self, user_id: UserId) {
@@ -430,5 +445,20 @@ mod tests {
         let long = "x".repeat(201);
         let too_long = service.handle_client_message(1, &long).await;
         assert!(matches!(too_long, Err(MessageError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_second_connection_for_the_same_user() {
+        let db = setup_in_memory_db().await;
+        let service = MessageService::new(db);
+
+        let first_connection = service.add_client(1).await;
+        let second_connection = service.add_client(1).await;
+
+        assert!(first_connection.is_some());
+        assert!(second_connection.is_none());
+
+        service.remove_client(1).await;
+        assert!(service.add_client(1).await.is_some());
     }
 }

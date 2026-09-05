@@ -82,6 +82,7 @@ pub struct MovementStats {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)] // Aggiunto PartialEq cosi' da poter confrontare i messaggi nei test
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WsClientMessage {
+    StartTrip, // Inizia un nuovo trip
     Text {
         text: String,
         //timestamp: DateTime<Utc>,
@@ -107,6 +108,7 @@ pub enum WsClientMessage {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
 pub enum WsServerMessage {
+    TripStarted, // Il trip è stato creato
     BroadcastText {
         id: i64,
         text: String,
@@ -163,5 +165,22 @@ mod tests {
         }"#;
 
         assert!(serde_json::from_str::<WsClientMessage>(json).is_err());
+    }
+
+    #[test]
+    fn trip_start_messages_round_trip() {
+        let client_json = serde_json::to_string(&WsClientMessage::StartTrip).unwrap();
+        let server_json = serde_json::to_string(&WsServerMessage::TripStarted).unwrap();
+
+        assert_eq!(client_json, r#"{"type":"start_trip"}"#);
+        assert_eq!(server_json, r#"{"type":"trip_started"}"#);
+        assert_eq!(
+            serde_json::from_str::<WsClientMessage>(&client_json).unwrap(),
+            WsClientMessage::StartTrip
+        );
+        assert_eq!(
+            serde_json::from_str::<WsServerMessage>(&server_json).unwrap(),
+            WsServerMessage::TripStarted
+        );
     }
 }
