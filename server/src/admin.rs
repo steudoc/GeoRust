@@ -9,7 +9,7 @@ use crossterm::{
 use futures::StreamExt; // necessario per consumare l'eventStream
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Alignment},
     style::{Color, Style, Modifier},
     widgets::{Block, Borders, Paragraph, List, ListItem},
     Terminal,
@@ -426,7 +426,7 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     f.render_widget(header, main_chunks[0]);
 
     let footer = Paragraph::new(" [ESC] Esci | [help] Comandi ")
-        .style(Style::default().fg(Color::DarkGray));
+        .alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, main_chunks[2]);
 
     // SPLIT DELLA SIDEBAR DESTRA
