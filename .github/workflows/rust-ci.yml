@@ -1,0 +1,53 @@
+name: Rust CI
+
+on:
+    push:
+        branches: [dev, main]
+    pull_request:
+        branches: [dev, main]
+    workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Seleziono versione stable Rust
+        run: rustup default stable
+
+      - name: Install0 componenti Rust
+        run: rustup component add rustfmt clippy
+
+      - name: Mostrare versioni Rust
+        run: |
+          rustc -Vv
+          cargo -V
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Cargo tests
+        run: cargo test --workspace --all-targets
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Cargo Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build release
+        run: cargo build --workspace --release
