@@ -169,12 +169,11 @@ async fn do_server_side_socket_operations(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text: msg_text }) => {
-                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await {
-                                    if !send_server_message(&mut ws_sender, &err.to_client_message()).await {
+                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await
+                                    && !send_server_message(&mut ws_sender, &err.to_client_message()).await {
                                         tracing::error!("Errore durante l'invio della risposta al client");
                                         break;
                                     }
-                                }
                             },
                             Ok(DirectTextAck { id }) => {
                                 if let Err(e) = state.message_service.acknowledge_message(user_id, id).await {

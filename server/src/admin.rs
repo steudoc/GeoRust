@@ -104,7 +104,7 @@ impl TuiState {
                     Err(e) => {
                         tracing::error!("Errore DB: {}", e);
                         self.logs
-                            .push(format!("Errore durante l'estrazione degli utenti."));
+                            .push("Errore durante l'estrazione degli utenti.".to_string());
                     }
                 }
             }
@@ -572,11 +572,7 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     let line_count = state.logs.len() as u16;
     let area_height = left_chunks[0].height.saturating_sub(2);
 
-    let max_base_offset = if line_count > area_height {
-        line_count - area_height
-    } else {
-        0
-    };
+    let max_base_offset = line_count.saturating_sub(area_height);
     state.scroll_offset = state.scroll_offset.min(max_base_offset);
     let actual_scroll = max_base_offset - state.scroll_offset;
 
