@@ -135,9 +135,7 @@ async fn run_dashboard(
             app.mark_connected();
         }
         Err(error) if is_user_already_connected(&error) => {
-            anyhow::bail!(
-                "Accesso rifiutato: questo utente è già connesso da un altro client"
-            );
+            anyhow::bail!("Accesso rifiutato: questo utente è già connesso da un altro client");
         }
         Err(error) => {
             app.mark_disconnected(format!("Connessione WebSocket fallita: {error}"));

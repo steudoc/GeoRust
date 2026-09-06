@@ -1,3 +1,4 @@
+use crate::messaging::MessageService;
 use crate::trip::{Trip, TripError};
 use anyhow::Context;
 use chrono::NaiveDate;
@@ -6,7 +7,6 @@ use sqlx::SqlitePool;
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use crate::messaging::MessageService;
 
 type UserId = i64;
 
