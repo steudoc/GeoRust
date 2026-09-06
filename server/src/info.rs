@@ -26,8 +26,7 @@ pub async fn start_cpu_logger() {
             let cpu_usage_percent = process.cpu_usage();
             let run_time_sec = process.run_time();
 
-            let interval_cpu_time_sec =
-                cpu_usage_percent / 100.0 * LOG_INTERVAL_SECS as f32;
+            let interval_cpu_time_sec = cpu_usage_percent / 100.0 * LOG_INTERVAL_SECS as f32;
 
             total_cpu_time_sec += interval_cpu_time_sec;
 
