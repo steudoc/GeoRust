@@ -9,7 +9,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use futures::StreamExt; // necessario per consumare l'eventStream
+use futures_util::StreamExt; // necessario per consumare l'eventStream
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,

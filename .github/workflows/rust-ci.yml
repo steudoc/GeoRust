@@ -29,7 +29,7 @@ jobs:
       - name: Seleziono versione stable Rust
         run: rustup default stable
 
-      - name: Install0 componenti Rust
+      - name: Installo componenti Rust
         run: rustup component add rustfmt clippy
 
       - name: Mostrare versioni Rust
