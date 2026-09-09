@@ -1,11 +1,20 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StatType {
+    Tragitto,
+    VelocitaMedia,
+    Durate, 
+    Tutto,  
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputMode {
     Command,
     MessageSelection,   // scelta diretto (1) o broadcast (2)
     TargetSelection,    // solo per msg diretti
     MessageWriting,
-    StatsSelection,
+    StatsTypeSelection,
+    TemporalSelection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,6 +44,7 @@ pub(super) enum AppAction {
     },
     CalculateStats {
         username: String,
+        stat_type: StatType,
         interval: String,
     },
     SeeUsers,
@@ -51,6 +61,7 @@ pub(super) struct ServerApp {
     pub input_mode: InputMode,
     pub pending_username: Option<String>,
     pub pending_msg_kind: Option<MessageKind>,
+    pub pending_stat_type: Option<StatType>,
     pub console_scroll: u16,
     pub messages_scroll: u16,
     pub active_users: Vec<(i64, String)>,
@@ -67,6 +78,7 @@ impl ServerApp {
             input_mode: InputMode::Command,
             pending_username: None,
             pending_msg_kind: None,
+            pending_stat_type: None,
             console_scroll: 0,
             messages_scroll: 0,
             active_users: Vec::new(),
@@ -89,7 +101,8 @@ impl ServerApp {
             InputMode::MessageSelection => self.process_msg_selection(value),
             InputMode::TargetSelection => self.process_target_selection(value),
             InputMode::MessageWriting => self.process_msg_writing(value),
-            InputMode::StatsSelection => self.process_stats_selection(value),
+            InputMode::StatsTypeSelection => self.process_stat_type_selection(value),
+            InputMode::TemporalSelection => self.process_temporal_selection(value),
         }
     }
 
@@ -119,9 +132,12 @@ impl ServerApp {
                 if !argument.is_empty() {
                     let username = argument.to_string();
                     self.pending_username = Some(username);
-                    self.input_mode = InputMode::StatsSelection;
-                    self.push_console("Seleziona l'intervallo temporale:");
-                    self.push_console("  day | week | month ");
+                    self.input_mode = InputMode::StatsTypeSelection;
+                    self.push_console("Seleziona l'interrogazione desiderata:");
+                    self.push_console("  1. Tragitto percorso");
+                    self.push_console("  2. Velocità media");
+                    self.push_console("  3. Durata movimento e pause");
+                    self.push_console("  4. Report completo (Tutto)");
                     AppAction::None
                 } else {
                     self.push_console("Errore: specifica un username valido");
@@ -194,14 +210,37 @@ impl ServerApp {
             }
         }
     }
-    
-    fn process_stats_selection(&mut self, value: &str) -> AppAction {
+
+    fn process_stat_type_selection(&mut self, value: &str) -> AppAction {
+        let stat_type = match value {
+            "1" => StatType::Tragitto,
+            "2" => StatType::VelocitaMedia,
+            "3" => StatType::Durate,
+            "4" => StatType::Tutto,
+            _ => {
+                self.push_console("Scelta non valida. Digita un numero da 1 a 4.");
+                return AppAction::None;
+            }
+        };
+
+        self.pending_stat_type = Some(stat_type);
+        self.input_mode = InputMode::TemporalSelection;
+        
+        self.push_console("Seleziona l'intervallo temporale:");
+        self.push_console("  Opzioni: day | week | month");
+        AppAction::None
+    }
+
+    fn process_temporal_selection(&mut self, value: &str) -> AppAction {
         let interval = value.to_lowercase();
         if ["day", "week", "month"].contains(&interval.as_str()) {
-            self.input_mode = InputMode::Command; // Torna al menu
-            let username = self.pending_username.take().unwrap_or("None".to_string());
             
-            AppAction::CalculateStats { username, interval }
+            self.input_mode = InputMode::Command;
+            
+            let username = self.pending_username.take().unwrap_or("".to_string());
+            let stat_type = self.pending_stat_type.take().unwrap_or(StatType::Tutto);
+            
+            AppAction::CalculateStats { username, stat_type, interval }
         } else {
             self.push_console("Valore non valido. Digita 'day', 'week' o 'month'.");
             AppAction::None

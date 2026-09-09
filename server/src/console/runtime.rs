@@ -19,6 +19,7 @@ use super::{
 };
 use crate::AppState;
 use crate::stats;
+use crate::console::app::StatType;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -195,23 +196,58 @@ async fn run_dashboard(
                                             Err(e) => app.push_console(format!("Errore: {}", e)),
                                         }
                                     }
-                                    AppAction::CalculateStats { username, interval } => {
+                                    AppAction::CalculateStats { username, stat_type, interval } => {
                                         if let Some(user_id) = app_state.get_user_id(&username).await {
-                                            app.push_console(format!("Calcolo statistiche per #{} {} ({})", user_id, username, interval));
+                                            app.push_console(format!("Calcolo statistiche per {} ({})", username, interval));
+                                            app.push_console("------------------------------------------");
+                                            app.push_console(format!("Username:            {}", username));
+                                            app.push_console(format!("Periodo:             {}", interval));
                                             
-                                            match stats::calculate_user_stats(&app_state.db, user_id, &interval).await {
-                                                Ok(res) => {
-                                                    app.push_console("--------------------------------".to_string());
-                                                    app.push_console(format!("Username:         {}", username));
-                                                    app.push_console(format!("Period:           {}", res.period));
-                                                    app.push_console(format!("Distance:         {:.2} km", res.distance));
-                                                    app.push_console(format!("Total time:       {:.2} s", res.total_time));
-                                                    app.push_console(format!("Total pause time: {:.2} s", res.total_pause));
-                                                    app.push_console(format!("Average velocity: {:.2} km/h", res.avg_velocity));
-                                                    app.push_console("--------------------------------".to_string());
+                                            match stat_type {
+                                                StatType::Tragitto => {
+                                                    match stats::get_distance(&app_state.db, user_id, &interval).await {
+                                                        Ok(dist) => app.push_console(format!("Distanza tot:       {:.2} km", dist)),
+                                                        Err(e) => app.push_console(format!("Errore DB: {}", e)),
+                                                    }
                                                 }
-                                                Err(e) => app.push_console(format!("Errore db: {}", e)),
+                                                StatType::VelocitaMedia => {
+                                                    match stats::get_avg_velocity(&app_state.db, user_id, &interval).await {
+                                                        Ok(vel) => app.push_console(format!("Velocità media:     {:.2} km/h", vel)),
+                                                        Err(e) => app.push_console(format!("Errore DB: {}", e)),
+                                                    }
+                                                }
+                                                StatType::Durate => {
+                                                    match stats::get_durations(&app_state.db, user_id, &interval).await {
+                                                        Ok((mov, pause)) => {
+                                                            app.push_console(format!("Tempo in movimento:  {:.2} s", mov));
+                                                            app.push_console(format!("Tempo fermo:         {:.2} s", pause));
+                                                        }
+                                                        Err(e) => app.push_console(format!("Errore DB: {}", e)),
+                                                    }
+                                                }
+                                                StatType::Tutto => {
+                                                    let dist_fut = stats::get_distance(&app_state.db, user_id, &interval);
+                                                    let dur_fut = stats::get_durations(&app_state.db, user_id, &interval);
+                                                    let vel_fut = stats::get_avg_velocity(&app_state.db, user_id, &interval);
+
+                                                    // eseguite tutte in parallelo
+                                                    match tokio::try_join!(dist_fut, dur_fut, vel_fut) {
+                                                        Ok((dist, (mov, pause), vel)) => {
+                                                            let tot = mov + pause;
+                                                            app.push_console(format!("Distanza:            {:.2} km", dist));
+                                                            app.push_console(format!("Tempo in movimento:  {:.2} s", mov));
+                                                            app.push_console(format!("Tempo fermo:         {:.2} s", pause));
+                                                            app.push_console(format!("Tempo totale:        {:.2} s", tot));
+                                                            app.push_console(format!("Velocità media:      {:.2} km/h", vel));
+                                                        }
+                                                        Err(e) => {
+                                                            app.push_console(format!("Errore DB durante l'estrazione: {}", e));
+                                                        }
+                                                    }
+                                                }
                                             }
+                                            
+                                            app.push_console("--------------------------------");
                                         } else {
                                             app.push_console(format!("Errore: l'utente '{}' non esiste.", username));
                                         }                               

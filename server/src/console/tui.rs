@@ -180,7 +180,8 @@ fn draw_input(frame: &mut Frame, state: &ServerApp, area: Rect) {
         InputMode::MessageSelection => " Messaggio [1] diretto, [2] broadcast ",
         InputMode::TargetSelection => " Destinatario ",
         InputMode::MessageWriting => " Testo ",
-        InputMode::StatsSelection => " Finestra temporale [ day | week | month ] "
+        InputMode::StatsTypeSelection => " Tipo Interrogazione [1] Tragitto, [2] Velocità, [3] Durate, [4] Tutto ",
+        InputMode::TemporalSelection => " Finestra temporale [ day | week | month ] ",
     };
     let panel = Paragraph::new(format!("> {}", state.input))
         .style(Style::default().fg(Color::Yellow))
