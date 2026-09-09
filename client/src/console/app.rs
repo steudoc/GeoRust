@@ -358,26 +358,26 @@ impl ClientApp {
         self.messages_scroll = 0;
     }
 
-    pub fn add_direct_message(&mut self, id: i64, text: String, timestamp: DateTime<Utc>) {
+    pub fn add_direct_message(&mut self, text: String, timestamp: DateTime<Utc>) {
         self.messages.push(MessageEntry {
             kind: MessageKind::Direct,
             timestamp: timestamp
                 .with_timezone(&Local)
                 .format("%H:%M:%S")
                 .to_string(),
-            text: format!("#{id} {text}"),
+            text,
         });
         self.messages_scroll = 0;
     }
 
-    pub fn add_broadcast_message(&mut self, id: i64, text: String, timestamp: DateTime<Utc>) {
+    pub fn add_broadcast_message(&mut self, text: String, timestamp: DateTime<Utc>) {
         self.messages.push(MessageEntry {
             kind: MessageKind::Broadcast,
             timestamp: timestamp
                 .with_timezone(&Local)
                 .format("%H:%M:%S")
                 .to_string(),
-            text: format!("#{id} {text}"),
+            text,
         });
         self.messages_scroll = 0;
     }

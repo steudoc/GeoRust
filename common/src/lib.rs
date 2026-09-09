@@ -110,7 +110,6 @@ pub enum WsClientMessage {
 pub enum WsServerMessage {
     TripStarted, // Il trip è stato creato
     BroadcastText {
-        id: i64,
         text: String,
         timestamp: DateTime<Utc>,
     },

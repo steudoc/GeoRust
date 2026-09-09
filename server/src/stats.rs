@@ -1,16 +1,11 @@
 use chrono::{Datelike, Days, Utc};
-use common::MovementStats;
-use sqlx::{Row, SqlitePool};
+use sqlx::Row;
 
-pub async fn calculate_user_stats(
-    pool: &SqlitePool,
-    user_id: i64,
-    period: &str,
-) -> Result<MovementStats, sqlx::Error> {
+fn determine_start_date(interval: &str) -> String {
     let now = Utc::now().date_naive();
 
     // determinazione della data di inizio per SQLite
-    let start_date = match period {
+    match interval {
         "day" => now.to_string(),
         "week" => {
             let days_from_monday = now.weekday().num_days_from_monday() as u64;
@@ -18,13 +13,40 @@ pub async fn calculate_user_stats(
         }
         "month" => now.with_day(1).unwrap_or(now).to_string(),
         _ => now.to_string(),
-    };
+    }
+}
 
-    // query aggregata
+pub async fn get_distance(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    interval: &str,
+) -> Result<f64, sqlx::Error> {
+    let start_date = determine_start_date(interval);
+
+    let row = sqlx::query(
+        r#"SELECT COALESCE(SUM(CAST(distance_km AS REAL)), 0.0) AS tot_dist
+        FROM trips
+        WHERE user_id = ?
+            AND date(trip_date) >= date(?)"#,
+    )
+    .bind(user_id)
+    .bind(start_date)
+    .fetch_one(db)
+    .await?;
+
+    let distance = row.try_get("tot_dist")?;
+    Ok(distance)
+}
+
+pub async fn get_durations(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    interval: &str,
+) -> Result<(f64, f64), sqlx::Error> {
+    let start_date = determine_start_date(interval);
+
     let row = sqlx::query(
         r#"SELECT
-            COALESCE(SUM(CAST(distance_km AS REAL)), 0.0) AS tot_dist,
-            COALESCE(SUM(CAST(moving_seconds + stopped_seconds AS REAL)), 0.0) AS tot_time,
             COALESCE(SUM(CAST(stopped_seconds AS REAL)), 0.0) AS tot_pause,
             COALESCE(SUM(CAST(moving_seconds AS REAL)), 0.0) AS moving_time
         FROM trips
@@ -33,14 +55,22 @@ pub async fn calculate_user_stats(
     )
     .bind(user_id)
     .bind(start_date)
-    .fetch_one(pool)
+    .fetch_one(db)
     .await?;
 
-    // estrazione dati
-    let distance: f64 = row.try_get("tot_dist")?;
-    let total_time: f64 = row.try_get("tot_time")?;
     let total_pause: f64 = row.try_get("tot_pause")?;
     let moving_time: f64 = row.try_get("moving_time")?;
+
+    Ok((total_pause, moving_time))
+}
+
+pub async fn get_avg_velocity(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    interval: &str,
+) -> Result<f64, sqlx::Error> {
+    let distance = get_distance(db, user_id, interval).await?;
+    let (_total_pause, moving_time) = get_durations(db, user_id, interval).await?;
 
     // La velocità media considera soltanto il tempo effettivamente in movimento.
     let avg_velocity = if moving_time > 0.0 {
@@ -49,13 +79,7 @@ pub async fn calculate_user_stats(
         0.0
     };
 
-    Ok(MovementStats {
-        period: period.to_string(),
-        distance,
-        total_time,
-        total_pause,
-        avg_velocity,
-    })
+    Ok(avg_velocity)
 }
 
 // ------------------------------
@@ -63,8 +87,9 @@ pub async fn calculate_user_stats(
 // ------------------------------
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::*; // Importa le tre nuove funzioni
     use chrono::{Duration, Utc};
+    use sqlx::SqlitePool;
     use sqlx::sqlite::SqlitePoolOptions;
 
     // Funzione helper per creare un DB in memoria pulito ad ogni test
@@ -113,15 +138,19 @@ mod tests {
         .await
         .unwrap();
 
-        let stats = calculate_user_stats(&pool, 1, "day").await.unwrap();
+        // 1. Test Distanza
+        let distance = get_distance(&pool, 1, "day").await.unwrap();
+        assert_eq!(distance, 15.0);
 
-        assert_eq!(stats.period, "day");
-        assert_eq!(stats.distance, 15.0);
-        assert_eq!(stats.total_time, 3600.0);
-        assert_eq!(stats.total_pause, 1800.0);
+        // 2. Test Durate
+        let (moving, stopped) = get_durations(&pool, 1, "day").await.unwrap();
+        assert_eq!(moving, 1800.0);
+        assert_eq!(stopped, 1800.0);
 
-        // (15.0 / 1800.0) * 3600 = 30.0
-        assert_eq!(stats.avg_velocity, 30.0);
+        // 3. Test Velocità
+        // (15.0 / 1800.0s) * 3600 = 30.0 km/h
+        let velocity = get_avg_velocity(&pool, 1, "day").await.unwrap();
+        assert_eq!(velocity, 30.0);
     }
 
     #[tokio::test]
@@ -139,12 +168,15 @@ mod tests {
         .await
         .unwrap();
 
-        // richiediamo le stats per l'utente 1
-        let stats = calculate_user_stats(&pool, 1, "day").await.unwrap();
+        // Richiediamo le stats per l'utente 1 (che non ha viaggi)
+        let distance = get_distance(&pool, 1, "day").await.unwrap();
+        let (moving, stopped) = get_durations(&pool, 1, "day").await.unwrap();
+        let velocity = get_avg_velocity(&pool, 1, "day").await.unwrap();
 
-        assert_eq!(stats.distance, 0.0);
-        assert_eq!(stats.total_time, 0.0);
-        assert_eq!(stats.avg_velocity, 0.0);
+        assert_eq!(distance, 0.0);
+        assert_eq!(moving, 0.0);
+        assert_eq!(stopped, 0.0);
+        assert_eq!(velocity, 0.0);
     }
 
     #[tokio::test]
@@ -156,7 +188,7 @@ mod tests {
         // sottraiamo 40 giorni, in modo da essere sicuramente fuori dal mese corrente
         let past_str = (now - Duration::days(40)).to_string();
 
-        // viaggio 1: oggi
+        // viaggio 1: oggi (10km)
         sqlx::query(
             "INSERT INTO trips (user_id, trip_date, distance_km, moving_seconds, stopped_seconds)
              VALUES (1, ?, 10.0, 1000.0, 100.0)",
@@ -166,7 +198,7 @@ mod tests {
         .await
         .unwrap();
 
-        // viaggio 2: 40 giorni fa
+        // viaggio 2: 40 giorni fa (50km)
         sqlx::query(
             "INSERT INTO trips (user_id, trip_date, distance_km, moving_seconds, stopped_seconds)
              VALUES (1, ?, 50.0, 1000.0, 100.0)",
@@ -176,7 +208,8 @@ mod tests {
         .await
         .unwrap();
 
-        let stats = calculate_user_stats(&pool, 1, "month").await.unwrap();
-        assert_eq!(stats.distance, 10.0);
+        // Testiamo che consideri solo il viaggio di oggi (10.0) e ignori quello di 40gg fa (50.0)
+        let distance = get_distance(&pool, 1, "month").await.unwrap();
+        assert_eq!(distance, 10.0);
     }
 }

@@ -1,12 +1,15 @@
-use crate::messaging::MessageService;
-use crate::trip::{Trip, TripError};
 use anyhow::Context;
 use chrono::NaiveDate;
+use chrono::TimeZone;
 use common::{UserState, tracking::Coordinata};
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
+
+use crate::console::app::{MessageEntry, MessageKind};
+use crate::messaging::MessageService;
+use crate::trip::{Trip, TripError};
 
 type UserId = i64;
 
@@ -87,6 +90,13 @@ pub struct TripSummary {
     pub moving_seconds: u64,
     pub stopped_seconds: u64,
     pub distance_km: f64,
+}
+
+pub struct LogMessage {
+    pub kind: String,
+    pub content: String,
+    pub timestamp_ms: i64,
+    pub is_read: bool,
 }
 
 impl AppState {
@@ -222,8 +232,168 @@ impl AppState {
         Ok(trip_id)
     }
 
-    pub async fn get_connected_users(&self) -> Vec<i64> {
-        self.message_service.connected_users().await
+    pub async fn get_connected_users(&self) -> Vec<(i64, String)> {
+        let ids: Vec<i64> = self.message_service.connected_users().await;
+
+        let mut users = Vec::new();
+
+        for id in ids {
+            let username = self
+                .get_username_by_id(id)
+                .await
+                .unwrap_or_else(|| format!("Utente #{}", id));
+
+            users.push((id, username));
+        }
+
+        users
+    }
+
+    pub async fn get_username_by_id(&self, id: i64) -> Option<String> {
+        // query_scalar estrae direttamente il valore della prima colonna (username)
+        let query_result: Result<Option<String>, sqlx::Error> =
+            sqlx::query_scalar("SELECT username FROM users WHERE id = ?1")
+                .bind(id)
+                .fetch_optional(&self.db)
+                .await;
+
+        match query_result {
+            Ok(Some(username)) => Some(username), // Trovato!
+            Ok(None) => None,                     // L'ID non esiste nel DB
+            Err(e) => {
+                // Errore di connessione o query errata
+                tracing::error!("Errore DB cercando username per l'ID {}: {}", id, e);
+                None
+            }
+        }
+    }
+
+    pub async fn get_registered_users(&self) -> Vec<(i64, String)> {
+        let query_result = sqlx::query("SELECT id, username FROM users ORDER BY id ASC")
+            .fetch_all(&self.db)
+            .await;
+
+        match query_result {
+            Ok(rows) => {
+                let mut users_list = Vec::new();
+                for row in rows {
+                    let id: i64 = row.get("id");
+                    let username: String = row.get("username");
+                    users_list.push((id, username));
+                }
+                users_list
+            }
+            Err(e) => {
+                tracing::error!("Errore DB: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    pub async fn get_user_logs(&self, username: &str) -> Result<Vec<LogMessage>, sqlx::Error> {
+        let query_result = sqlx::query(
+            r#"
+            SELECT kind, content, created_at_ms, is_read
+            FROM messages m
+            LEFT JOIN users u ON m.sender_id = u.id OR m.recipient_id = u.id
+            ORDER BY created_at_ms ASC 
+            LIMIT 10
+            "#,
+        )
+        .bind(username)
+        .fetch_all(&self.db)
+        .await?;
+
+        let mut messages = Vec::new();
+        for row in query_result {
+            messages.push(LogMessage {
+                kind: row.get("kind"),
+                content: row.get("content"),
+                timestamp_ms: row.get("created_at_ms"),
+                is_read: row.get("is_read"),
+            });
+        }
+
+        Ok(messages)
+    }
+
+    pub async fn get_user_id(&self, username: &str) -> Option<i64> {
+        let query_result = sqlx::query(
+            "SELECT id 
+            FROM users 
+            WHERE username = ?1",
+        )
+        .bind(username)
+        .fetch_optional(&self.db)
+        .await;
+
+        match query_result {
+            Ok(Some(row)) => {
+                let id: i64 = row.get("id");
+                Some(id)
+            }
+            Ok(None) => {
+                // Nessun utente trovato con questo username
+                None
+            }
+            Err(e) => {
+                tracing::error!("Errore DB cercando l'utente '{}': {}", username, e);
+                None
+            }
+        }
+    }
+
+    pub async fn get_msg(&self) -> Vec<MessageEntry> {
+        // estrae gli ultimi messaggi dal DB
+        let query = r#"
+            SELECT 
+                m.kind, 
+                m.content, 
+                m.created_at_ms, 
+                m.sender_id, 
+                m.recipient_id,
+                u.username
+            FROM messages m
+            LEFT JOIN users u ON u.id = m.sender_id OR u.id = m.recipient_id
+            ORDER BY m.created_at_ms DESC 
+        "#;
+
+        let mut new_messages = Vec::new();
+
+        if let Ok(rows) = sqlx::query(query).fetch_all(&self.db).await {
+            for row in rows.into_iter().rev() {
+                let kind: String = row.get("kind");
+                let content: String = row.get("content");
+                let ts: i64 = row.get("created_at_ms");
+                let sender_id: Option<i64> = row.get("sender_id");
+                let username: Option<String> = row.get("username");
+
+                // converte il timestamp in "HH:MM:SS"
+                let time_str = match chrono::Local.timestamp_millis_opt(ts) {
+                    chrono::LocalResult::Single(dt) => dt.format("%H:%M:%S").to_string(),
+                    _ => "??:??:??".to_string(),
+                };
+
+                let (msg_kind, target_username, display_text) = if kind == "broadcast" {
+                    (MessageKind::Broadcast, None, content)
+                } else if sender_id.is_none() {
+                    // mittente NULL = Inviato dal Server a un utente
+                    (MessageKind::Direct, username, content)
+                } else {
+                    // inviato da un utente verso il server
+                    (MessageKind::Received, username, content)
+                };
+
+                new_messages.push(MessageEntry {
+                    kind: msg_kind,
+                    timestamp: time_str,
+                    target_username,
+                    text: display_text,
+                });
+            }
+        }
+
+        new_messages
     }
 
     /// Rimuove dalla memoria il trip dell'utente senza salvarlo.

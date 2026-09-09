@@ -180,7 +180,6 @@ impl MessageService {
             .await?;
 
         let ws_msg = WsServerMessage::BroadcastText {
-            id: msg_id,
             text: trimmed.to_string(),
             timestamp: now,
         };

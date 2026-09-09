@@ -451,15 +451,11 @@ async fn handle_server_text(
             text,
             timestamp,
         }) => {
-            app.add_direct_message(id, text, timestamp);
+            app.add_direct_message(text, timestamp);
             send_protocol_message(writer, &WsClientMessage::DirectTextAck { id }).await?;
         }
-        Ok(WsServerMessage::BroadcastText {
-            id,
-            text,
-            timestamp,
-        }) => {
-            app.add_broadcast_message(id, text, timestamp);
+        Ok(WsServerMessage::BroadcastText { text, timestamp }) => {
+            app.add_broadcast_message(text, timestamp);
         }
         Err(error) => {
             app.push_console(format!("Risposta non valida dal server: {error}"));
