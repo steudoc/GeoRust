@@ -5,7 +5,7 @@ fn determine_start_date(interval: &str) -> String {
     let now = Utc::now().date_naive();
 
     // determinazione della data di inizio per SQLite
-    let start_date = match interval {
+    match interval {
         "day" => now.to_string(),
         "week" => {
             let days_from_monday = now.weekday().num_days_from_monday() as u64;
@@ -13,9 +13,7 @@ fn determine_start_date(interval: &str) -> String {
         }
         "month" => now.with_day(1).unwrap_or(now).to_string(),
         _ => now.to_string(),
-    };
-
-    start_date
+    }
 }
 
 pub async fn get_distance(
