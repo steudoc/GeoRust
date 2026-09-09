@@ -1,9 +1,10 @@
+use crate::messaging::MessageService;
 use crate::trip::{Trip, TripError};
 use anyhow::Context;
 use chrono::NaiveDate;
 use common::{UserState, tracking::Coordinata};
 use sqlx::{SqlitePool, Row};
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
 use chrono::TimeZone;
@@ -109,9 +110,16 @@ impl AppState {
         })
     }
 
-    pub async fn start_trip(&self, user_id: UserId) {
+    pub async fn start_trip(&self, user_id: UserId) -> bool {
         let mut trips = self.trips.write().await;
-        trips.insert(user_id, Trip::new(user_id));
+
+        match trips.entry(user_id) {
+            Entry::Occupied(_) => false,
+            Entry::Vacant(entry) => {
+                entry.insert(Trip::new(user_id));
+                true
+            }
+        }
     }
 
     pub async fn record_position(
@@ -226,11 +234,8 @@ impl AppState {
     }
 
     pub async fn get_connected_users(&self) -> Vec<(i64, String)> {
-        let ids: Vec<i64> = {
-            let trips_guard = self.trips.read().await;
-            trips_guard.keys().copied().collect()
-        };
-
+        let ids: Vec<i64> = self.message_service.connected_users().await;
+        
         let mut users = Vec::new();
 
         for id in ids {
@@ -393,6 +398,15 @@ impl AppState {
 
         return new_messages;
     }
+
+    /// Rimuove dalla memoria il trip dell'utente senza salvarlo.
+    ///
+    /// Restituisce `true` se esisteva un trip da rimuovere,
+    /// `false` se l'utente non aveva un trip attivo.
+    pub async fn discard_trip(&self, user_id: UserId) -> bool {
+        let mut trips = self.trips.write().await;
+        trips.remove(&user_id).is_some()
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -432,6 +446,17 @@ mod tests {
 
         let summary = state.finish_trip(42).await.unwrap();
         assert_eq!(summary.points_received, 1);
+    }
+
+    #[tokio::test]
+    async fn discarding_a_trip_allows_a_new_trip_for_the_same_user() {
+        let state = test_state();
+
+        assert!(state.start_trip(42).await);
+        assert!(!state.start_trip(42).await);
+        assert!(state.discard_trip(42).await);
+        assert!(!state.discard_trip(42).await);
+        assert!(state.start_trip(42).await);
     }
 
     #[tokio::test]

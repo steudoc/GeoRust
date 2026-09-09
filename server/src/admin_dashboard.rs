@@ -1,24 +1,28 @@
 /*use std::{sync::Arc};
 use std::io;
+use std::sync::Arc;
 
 use crossterm::{
-    event::{Event, EventStream, KeyCode, KeyEventKind, MouseEventKind, EnableMouseCapture, DisableMouseCapture},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
+        MouseEventKind,
+    },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use futures::StreamExt; // necessario per consumare l'eventStream
+use futures_util::StreamExt; // necessario per consumare l'eventStream
 use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Alignment},
-    style::{Color, Style, Modifier},
-    widgets::{Block, Borders, Paragraph, List, ListItem},
     Terminal,
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 use sqlx::Row;
 
-use crate::stats;
 use crate::AppState;
 use crate::messaging::MessageError;
+use crate::stats;
 
 // STATO INTERFACCIA
 pub struct TuiState {
@@ -32,26 +36,28 @@ pub struct TuiState {
 }
 impl TuiState {
     fn new(app_state: Arc<AppState>) -> Self {
-        Self { 
-            input: String::new(), 
+        Self {
+            input: String::new(),
             logs: vec![
                 "Benvenuto nella Admin Console.".to_string(),
                 "Digita 'help' per i comandi o 'exit' (o ESC) per uscire.".to_string(),
-            ], 
-            should_quit: false, 
+            ],
+            should_quit: false,
             app_state,
-            scroll_offset: 0, 
+            scroll_offset: 0,
             active_users: Vec::new(),
             recent_messages: Vec::new(),
         }
-    }    
+    }
 
     async fn process_command(&mut self) {
         self.scroll_offset = 0;
         let cmd = self.input.trim().to_string();
         self.input.clear();
 
-        if cmd.is_empty() { return; }
+        if cmd.is_empty() {
+            return;
+        }
 
         // stampa il comando a schermo come feedback
         self.logs.push(format!("> {cmd}"));
@@ -59,7 +65,8 @@ impl TuiState {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         match parts[0] {
             "help" => {
-                self.logs.push("Comandi disponibili: stats, users, msg, logs, clear, exit".to_string());
+                self.logs
+                    .push("Comandi disponibili: stats, users, msg, logs, clear, exit".to_string());
             }
             "clear" => {
                 self.logs.clear();
@@ -81,19 +88,24 @@ impl TuiState {
                         if users.is_empty() {
                             self.logs.push("Nessun utente trovato.".to_string());
                         } else {
-                            self.logs.push("--------------------------------".to_string());
-                            self.logs.push(format!("Utenti registrati ({}):", users.len()));
+                            self.logs
+                                .push("--------------------------------".to_string());
+                            self.logs
+                                .push(format!("Utenti registrati ({}):", users.len()));
                             for row in users {
                                 let id: i64 = row.get("id");
                                 let username: String = row.get("username");
-                                self.logs.push(format!("  - User ID: {}, Username: {}", id, username));
+                                self.logs
+                                    .push(format!("  - User ID: {}, Username: {}", id, username));
                             }
-                            self.logs.push("--------------------------------".to_string());
+                            self.logs
+                                .push("--------------------------------".to_string());
                         }
-                    },
+                    }
                     Err(e) => {
                         tracing::error!("Errore DB: {}", e);
-                        self.logs.push(format!("Errore durante l'estrazione degli utenti."));
+                        self.logs
+                            .push("Errore durante l'estrazione degli utenti.".to_string());
                     }
                 }
             }
@@ -104,30 +116,48 @@ impl TuiState {
                     if let Ok(user_id) = parts[1].parse::<i64>() {
                         let interval = parts[2];
                         if !["day", "week", "month"].contains(&interval) {
-                            self.logs.push("Errore: il periodo deve essere 'day', 'week' o 'month'".to_string());
+                            self.logs.push(
+                                "Errore: il periodo deve essere 'day', 'week' o 'month'"
+                                    .to_string(),
+                            );
                             return;
                         }
 
-                        self.logs.push(format!("Calcolo statistiche per utente {} in {}...", user_id, interval));
+                        self.logs.push(format!(
+                            "Calcolo statistiche per utente {} in {}...",
+                            user_id, interval
+                        ));
 
-                        match stats::calculate_user_stats(&self.app_state.db, user_id, interval).await {
+                        match stats::calculate_user_stats(&self.app_state.db, user_id, interval)
+                            .await
+                        {
                             Ok(res) => {
-                                self.logs.push("--------------------------------".to_string());
+                                self.logs
+                                    .push("--------------------------------".to_string());
                                 self.logs.push(format!("User id:          {}", user_id));
                                 self.logs.push(format!("Period:           {}", res.period));
-                                self.logs.push(format!("Distance:         {:.2} km", res.distance));
-                                self.logs.push(format!("Total time:       {:.2} s", res.total_time));
-                                self.logs.push(format!("Total pause time: {:.2} s", res.total_pause));
-                                self.logs.push(format!("Average velocity: {:.2} km/h", res.avg_velocity));
-                                self.logs.push("--------------------------------".to_string());
+                                self.logs
+                                    .push(format!("Distance:         {:.2} km", res.distance));
+                                self.logs
+                                    .push(format!("Total time:       {:.2} s", res.total_time));
+                                self.logs
+                                    .push(format!("Total pause time: {:.2} s", res.total_pause));
+                                self.logs.push(format!(
+                                    "Average velocity: {:.2} km/h",
+                                    res.avg_velocity
+                                ));
+                                self.logs
+                                    .push("--------------------------------".to_string());
                             }
                             Err(e) => self.logs.push(format!("Errore db: {}", e)),
                         }
                     } else {
-                        self.logs.push("Errore: user_id deve essere un numero intero.".to_string());
+                        self.logs
+                            .push("Errore: user_id deve essere un numero intero.".to_string());
                     }
                 } else {
-                    self.logs.push("Usage: stats <user_id> <day|week|month>".to_string());
+                    self.logs
+                        .push("Usage: stats <user_id> <day|week|month>".to_string());
                 }
             }
 
@@ -135,9 +165,12 @@ impl TuiState {
             "logs" => {
                 if parts.len() == 2 {
                     let username = parts[1];
-                    
-                    self.logs.push(format!("Estrazione ultimi 10 log per l'utente '{}'...", username));
-                        
+
+                    self.logs.push(format!(
+                        "Estrazione ultimi 10 log per l'utente '{}'...",
+                        username
+                    ));
+
                     let query_result = sqlx::query(
                         r#"
                         SELECT kind, content, created_at_ms, is_read
@@ -146,7 +179,7 @@ impl TuiState {
                         WHERE u.username = ?1 AND (m.kind != 'broadcast')
                         ORDER BY created_at_ms DESC 
                         LIMIT 10
-                        "#
+                        "#,
                     )
                     .bind(username)
                     .fetch_all(&self.app_state.db)
@@ -154,20 +187,28 @@ impl TuiState {
 
                     match query_result {
                         Ok(messages) if messages.is_empty() => {
-                            self.logs.push(format!("Nessun messaggio trovato per l'utente '{}'.", username));
+                            self.logs.push(format!(
+                                "Nessun messaggio trovato per l'utente '{}'.",
+                                username
+                            ));
                         }
                         Ok(messages) => {
-                            self.logs.push("--------------------------------".to_string());
+                            self.logs
+                                .push("--------------------------------".to_string());
                             for row in messages {
                                 let kind: String = row.get("kind");
                                 let content: String = row.get("content");
                                 let timestamp_ms: i64 = row.get("created_at_ms");
                                 let is_read: bool = row.get("is_read");
-                                
-                                let time_str = match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
-                                    Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
-                                    None => timestamp_ms.to_string(),
-                                };
+
+                                let time_str =
+                                    match chrono::DateTime::from_timestamp_millis(timestamp_ms) {
+                                        Some(dt) => dt
+                                            .with_timezone(&chrono::Local)
+                                            .format("%d/%m/%Y %H:%M:%S")
+                                            .to_string(),
+                                        None => timestamp_ms.to_string(),
+                                    };
 
                                 let kind = match kind.as_str() {
                                     "direct" => "OUTBOUND",
@@ -182,9 +223,16 @@ impl TuiState {
                                     _ => "",
                                 };
 
-                                self.logs.push(format!("[{}] [{}] {}{}", time_str, kind.to_uppercase(), content, read_status));
+                                self.logs.push(format!(
+                                    "[{}] [{}] {}{}",
+                                    time_str,
+                                    kind.to_uppercase(),
+                                    content,
+                                    read_status
+                                ));
                             }
-                            self.logs.push("--------------------------------".to_string());
+                            self.logs
+                                .push("--------------------------------".to_string());
                         }
                         Err(e) => self.logs.push(format!("Errore log: {}", e)),
                     }
@@ -202,55 +250,81 @@ impl TuiState {
                                 let username = parts[2];
                                 let text = parts[3..].join(" ");
                                 let time_str = chrono::Utc::now().format("%H:%M:%S");
-                            
-                                match self.app_state.message_service.send_admin_direct_message(username, &text).await {
-                                    Ok(_) => self.logs.push(format!("[{time_str}] [OUTBOUND -> {username}] {text} (PENDING)")),
+
+                                match self
+                                    .app_state
+                                    .message_service
+                                    .send_admin_direct_message(username, &text)
+                                    .await
+                                {
+                                    Ok(_) => self.logs.push(format!(
+                                        "[{time_str}] [OUTBOUND -> {username}] {text} (PENDING)"
+                                    )),
                                     Err(MessageError::NotFound(reason)) => {
                                         self.logs.push(format!("Invio fallito. {reason}"));
                                     }
                                     Err(MessageError::DatabaseError(e)) => {
                                         tracing::error!("Errore DB: {e}");
-                                        self.logs.push("Invio fallito. Errore imprevisto.".to_string());
+                                        self.logs
+                                            .push("Invio fallito. Errore imprevisto.".to_string());
                                     }
                                     Err(MessageError::ValidationError(msg)) => {
-                                        self.logs.push(format!("Invio fallito. Messaggio non valido: {msg}"));
+                                        self.logs.push(format!(
+                                            "Invio fallito. Messaggio non valido: {msg}"
+                                        ));
                                     }
                                 }
                             } else {
-                                self.logs.push("Usage: msg send <username> <testo>".to_string());
+                                self.logs
+                                    .push("Usage: msg send <username> <testo>".to_string());
                             }
                         }
                         "broadcast" => {
                             if parts.len() >= 3 {
                                 let text = parts[2..].join(" ");
                                 let time_str = chrono::Utc::now().format("%H:%M:%S");
-                                
-                                match self.app_state.message_service.send_admin_broadcast_message(&text).await {
-                                    Ok(_) => self.logs.push(format!("[{time_str}] [OUTBOUND -> BROADCAST] {text}")),
+
+                                match self
+                                    .app_state
+                                    .message_service
+                                    .send_admin_broadcast_message(&text)
+                                    .await
+                                {
+                                    Ok(_) => self.logs.push(format!(
+                                        "[{time_str}] [OUTBOUND -> BROADCAST] {text}"
+                                    )),
                                     Err(MessageError::DatabaseError(e)) => {
                                         tracing::error!("Errore DB: {e}");
-                                        self.logs.push("Invio fallito. Errore imprevisto.".to_string());
+                                        self.logs
+                                            .push("Invio fallito. Errore imprevisto.".to_string());
                                     }
                                     Err(MessageError::ValidationError(msg)) => {
-                                        self.logs.push(format!("Invio fallito. Messaggio non valido: {msg}"));
+                                        self.logs.push(format!(
+                                            "Invio fallito. Messaggio non valido: {msg}"
+                                        ));
                                     }
                                     _ => {
-                                        self.logs.push("Invio fallito. Errore imprevisto.".to_string());
+                                        self.logs
+                                            .push("Invio fallito. Errore imprevisto.".to_string());
                                     }
                                 }
                             } else {
                                 self.logs.push("Usage: msg broadcast <testo>".to_string());
                             }
                         }
-                        _ => self.logs.push("Sotto-comando non valido. Usa 'send' o 'broadcast'.".to_string()),
+                        _ => self.logs.push(
+                            "Sotto-comando non valido. Usa 'send' o 'broadcast'.".to_string(),
+                        ),
                     }
                 } else {
-                    self.logs.push("Usage: msg <send|broadcast> ...".to_string());
+                    self.logs
+                        .push("Usage: msg <send|broadcast> ...".to_string());
                 }
             }
 
             _ => {
-                self.logs.push("Comando sconosciuto. Digita 'help'.".to_string());
+                self.logs
+                    .push("Comando sconosciuto. Digita 'help'.".to_string());
             }
         }
 
@@ -263,7 +337,10 @@ impl TuiState {
 }
 
 // CORE ASINCRONO
-pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync::oneshot::Sender<()>) {
+pub async fn start_admin_console(
+    state: Arc<AppState>,
+    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+) {
     // setup iniziale del terminale
     enable_raw_mode().expect("Impossibile abilitare Raw Mode");
     let mut stdout = io::stdout();
@@ -279,7 +356,9 @@ pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync:
     // event loop
     loop {
         //disenga l'interfaccia ad ogni ciclo
-        terminal.draw(|f| draw_ui(f, &mut tui_state)).expect("Errore di rendering");
+        terminal
+            .draw(|f| draw_ui(f, &mut tui_state))
+            .expect("Errore di rendering");
 
         tokio::select! {
             // risveglio periodico
@@ -324,7 +403,7 @@ pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync:
                             Some(dt) => dt.with_timezone(&chrono::Local).format("%d/%m/%Y %H:%M:%S").to_string(),
                             None => "--/--/---- --:--:--".to_string(),
                         };
-                        
+
                         let display_str = if kind == "broadcast" {
                             format!("📢 [{time_str}] [BROADCAST] {content}")
                         } else {
@@ -341,7 +420,7 @@ pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync:
                                 format!("📥 [{time_str}] [FROM {sender_name}] {content}")
                             }
                         };
-                        
+
                         msgs.push(display_str);
                     }
                     tui_state.recent_messages = msgs;
@@ -378,11 +457,18 @@ pub async fn start_admin_console(state: Arc<AppState>, shutdown_tx: tokio::sync:
         }
 
         if tui_state.should_quit {
-            // ripristino essenziale 
+            // ripristino essenziale
             disable_raw_mode().expect("Impossibile disabilitare Raw Mode");
-            execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture).expect("Errore ripristino");
-            terminal.show_cursor().expect("Impossibile mostrare il cursore");
-            
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            )
+            .expect("Errore ripristino");
+            terminal
+                .show_cursor()
+                .expect("Impossibile mostrare il cursore");
+
             // invio segnale di shutdown al server
             let _ = shutdown_tx.send(());
             return;
@@ -405,10 +491,7 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     // LAYOUT CENTRALE: Console (75%) | Sidebar (25%)
     let center_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ])
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(main_chunks[1]);
 
     // LAYOUT CONSOLE (SINISTRA): logs, input
@@ -421,12 +504,17 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
         .split(center_chunks[0]);
 
     // HEADER & FOOTER
-    let header = Paragraph::new(" GeoRust Admin Dashboard ")
-        .style(Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD));
+    let header = Paragraph::new(" GeoRust Admin Dashboard ").style(
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
     f.render_widget(header, main_chunks[0]);
 
     let footer = Paragraph::new(" [ESC] Esci | [help] Comandi ")
-        .alignment(Alignment::Center).style(Style::default().fg(Color::DarkGray));
+        .alignment(Alignment::Center)
+        .style(Style::default().fg(Color::DarkGray));
     f.render_widget(footer, main_chunks[2]);
 
     // SPLIT DELLA SIDEBAR DESTRA
@@ -441,21 +529,26 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     // UTENTI LIVE (alto destra)
     let mut user_items = Vec::new();
     if state.active_users.is_empty() {
-        user_items.push(ListItem::new("Nessuno online").style(Style::default().fg(Color::DarkGray)));
+        user_items
+            .push(ListItem::new("Nessuno online").style(Style::default().fg(Color::DarkGray)));
     } else {
         for id in &state.active_users {
             user_items.push(
-                ListItem::new(format!("🟢 User #{}", id))
-                    .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+                ListItem::new(format!("🟢 User #{}", id)).style(
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
             );
         }
     }
 
-    let users_list = List::new(user_items)
-        .block(Block::default()
+    let users_list = List::new(user_items).block(
+        Block::default()
             .title(format!(" Live Users ({}) ", state.active_users.len()))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)));
+            .border_style(Style::default().fg(Color::Cyan)),
+    );
     f.render_widget(users_list, right_chunks[0]);
 
     // MESSAGGI RECENTI (basso destra) con word wrap
@@ -466,10 +559,12 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     };
 
     let msg_paragraph = Paragraph::new(msg_text)
-        .block(Block::default()
-            .title(" Recent Messages ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Magenta)))
+        .block(
+            Block::default()
+                .title(" Recent Messages ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta)),
+        )
         .wrap(ratatui::widgets::Wrap { trim: true });
     f.render_widget(msg_paragraph, right_chunks[1]);
 
@@ -477,25 +572,27 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
     let logs_text = state.logs.join("\n");
     let line_count = state.logs.len() as u16;
     let area_height = left_chunks[0].height.saturating_sub(2);
-    
-    let max_base_offset = if line_count > area_height { line_count - area_height } else { 0 };
+
+    let max_base_offset = line_count.saturating_sub(area_height);
     state.scroll_offset = state.scroll_offset.min(max_base_offset);
     let actual_scroll = max_base_offset - state.scroll_offset;
 
     let title = " Console ".to_string();
     let logs_block = Paragraph::new(logs_text)
         .block(Block::default().title(title).borders(Borders::ALL))
-        .scroll((actual_scroll, 0)); 
+        .scroll((actual_scroll, 0));
     f.render_widget(logs_block, left_chunks[0]);
 
     // INPUT (Basso Sinistra)
     let input_text = format!("> {}", state.input);
     let input_block = Paragraph::new(input_text)
         .style(Style::default().fg(Color::Yellow))
-        .block(Block::default()
-            .title(" Invia Comando ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow)));
+        .block(
+            Block::default()
+                .title(" Invia Comando ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        );
     f.render_widget(input_block, left_chunks[1]);
 }
 */

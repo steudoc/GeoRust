@@ -1,10 +1,12 @@
 mod admin_dashboard;
 mod auth;
 mod cpu_usage;
-mod state;
-mod stats;
 mod messaging;
 mod console;
+mod info;
+mod messaging;
+mod state;
+mod stats;
 #[cfg_attr(not(test), allow(dead_code))]
 mod trip;
 
@@ -14,11 +16,10 @@ use common::{
     WsServerMessage,
 };
 
-
-use std::sync::Arc;
 use futures_util::{SinkExt, StreamExt};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::str::FromStr;
+use std::sync::Arc;
 
 use crate::state::{AppState, initialize_database};
 
@@ -36,7 +37,7 @@ use axum::{
 };
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast::error::RecvError, mpsc};
 use tracing_appender::rolling;
 
 #[tokio::main]
@@ -54,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let db_url = format!("sqlite://{DB_PATH}?mode=rw");
     let connection_options = SqliteConnectOptions::from_str(&db_url)?.foreign_keys(true);
 
+    // Crea un pool di connessioni al database SQLite
     let pool = SqlitePoolOptions::new()
         .max_connections(50)
         .connect_with(connection_options)
@@ -105,7 +107,7 @@ async fn main() -> anyhow::Result<()> {
 // WEBSOCKET
 // ============================================================================
 
-/// Handler per la connessione WebSocket. 
+/// Handler per la connessione WebSocket.
 /// Verifica il token e, se valido, promuove la connessione a WebSocket.
 async fn ws_handler(
     State(state): State<Arc<AppState>>,
@@ -124,32 +126,41 @@ async fn ws_handler(
         None => return (StatusCode::UNAUTHORIZED, "token non valido").into_response(),
     };
 
-    ws.on_upgrade(move |socket| do_server_side_socket_operations(socket, user_id, state))
-        .into_response()
+    // Evitiamo connessioni multiple dello stesso utente
+    let Some(direct_rx) = state.message_service.add_client(user_id).await else {
+        return (StatusCode::CONFLICT, "Utente già connesso").into_response();
+    };
+
+    let failed_state = Arc::clone(&state);
+
+    ws.on_failed_upgrade(move |error| {
+        tracing::warn!("Upgrade WebSocket fallito per user_id {user_id}: {error}");
+
+        tokio::spawn(async move {
+            failed_state.message_service.remove_client(user_id).await;
+        });
+    })
+    .on_upgrade(move |socket| do_server_side_socket_operations(socket, user_id, state, direct_rx))
+    .into_response()
 }
 
 /// Gestisce la connessione una volta "promossa" a WebSocket.
 /// Effettua il loop di ricezione dei messaggi dal client e l'invio di messaggi diretti e broadcast.
 async fn do_server_side_socket_operations(
-    socket: WebSocket, 
+    socket: WebSocket,
     user_id: i64,
-    state: Arc<AppState>
+    state: Arc<AppState>,
+    mut direct_rx: mpsc::Receiver<WsServerMessage>, // Canale MPSC per i messaggi diretti
 ) {
     tracing::info!("Client connesso: user_id = {user_id}");
 
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Crezione del canale MPSC per i messaggi diretti
-    let mut direct_rx = state.message_service.add_client(user_id).await;
-
-    state.start_trip(user_id).await;
-
     // Iscrizione al canale BROADCAST globale
     let mut broadcast_rx = state.message_service.subscribe_broadcast();
 
-    let mut trip_finished = false;
     let mut close_after_response = false;
-    
+
     // Invio automatico messaggi pendenti non letti
     if let Ok(unread_msgs) = state.message_service.get_unread_messages(user_id).await {
         for msg in unread_msgs {
@@ -168,16 +179,29 @@ async fn do_server_side_socket_operations(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<WsClientMessage>(&text) {
                             Ok(Text { text: msg_text }) => {
-                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await {
-                                    if !send_server_message(&mut ws_sender, &err.to_client_message()).await {
+                                if let Err(err) = state.message_service.handle_client_message(user_id, &msg_text).await
+                                    && !send_server_message(&mut ws_sender, &err.to_client_message()).await {
                                         tracing::error!("Errore durante l'invio della risposta al client");
                                         break;
                                     }
-                                }
                             },
                             Ok(DirectTextAck { id }) => {
                                 if let Err(e) = state.message_service.acknowledge_message(user_id, id).await {
                                     tracing::error!("Errore ACK per user_id {user_id}: {:?}", e);                                }
+                            },
+                            Ok(WsClientMessage::StartTrip) => {
+                                let response = if state.start_trip(user_id).await {
+                                    WsServerMessage::TripStarted
+                                } else {
+                                    WsServerMessage::Error {
+                                        code: "trip_already_active".to_string(),
+                                        message: "È già presente un trip attivo".to_string(),
+                                    }
+                                };
+
+                                if !send_server_message(&mut ws_sender, &response).await {
+                                    break;
+                                }
                             },
                             Ok(WsClientMessage::PositionUpdate { coordinata, elapsed_seconds }) => {
                                 let response = match state.record_position(user_id, coordinata, elapsed_seconds).await {
@@ -210,7 +234,11 @@ async fn do_server_side_socket_operations(
 
                                         match state.save_trip(user_id, trip_date, summary).await {
                                             Ok(trip_id) => {
-                                                trip_finished = true;
+                                                if !state.discard_trip(user_id).await {
+                                                    tracing::warn!(
+                                                        "Trip salvato ma non trovato in memoria per user_id {user_id}"
+                                                    );
+                                                }
                                                 let msg = format!(
                                                     "Tragitto {trip_id} completato per user_id {user_id}: {} punti, {:.2} km, movimento {}s, fermo {}s",
                                                     summary.points_received,
@@ -312,17 +340,10 @@ async fn do_server_side_socket_operations(
         }
     }
 
-    if !trip_finished {
-        if let Some(summary) = state.finish_trip(user_id).await {
-            let msg = format!(
-                "Riepilogo user_id {user_id}: {} punti, {}s in movimento, {}s fermo",
-                summary.points_received, 
-                summary.moving_seconds, 
-                summary.stopped_seconds
-            );
-            //println!("{}", msg);
-            tracing::info!("{}", msg);
-        }
+    if state.discard_trip(user_id).await {
+        tracing::info!(
+            "Trip interrotto e scartato per user_id {user_id}: nessun salvataggio eseguito"
+        );
     }
 
     state.message_service.remove_client(user_id).await;

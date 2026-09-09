@@ -18,7 +18,7 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::{net::TcpStream, sync::mpsc, task::JoinHandle, time::MissedTickBehavior};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
-    tungstenite::{Message, client::IntoClientRequest},
+    tungstenite::{Error as WebSocketError, Message, client::IntoClientRequest},
 };
 
 use crate::movement::{RoutePoint, RouteSimulator};
@@ -134,6 +134,9 @@ async fn run_dashboard(
             socket_reader = Some(reader);
             app.mark_connected();
         }
+        Err(error) if is_user_already_connected(&error) => {
+            anyhow::bail!("Accesso rifiutato: questo utente è già connesso da un altro client");
+        }
         Err(error) => {
             app.mark_disconnected(format!("Connessione WebSocket fallita: {error}"));
         }
@@ -186,7 +189,19 @@ async fn run_dashboard(
                                         }
                                     }
                                     AppAction::StartTrip { route, speed_factor } => {
-                                        start_trip(&mut app, &mut simulator, route, speed_factor);
+                                        if let Err(error) = start_trip(
+                                            &mut app,
+                                            &mut simulator,
+                                            &mut socket_writer,
+                                            route,
+                                            speed_factor,
+                                        )
+                                        .await
+                                        {
+                                            disconnect_reason = Some(format!(
+                                                "Avvio del trip fallito: {error}"
+                                            ));
+                                        }
                                     }
                                 }
                             }
@@ -207,7 +222,14 @@ async fn run_dashboard(
             server_event = next_server_event(&mut socket_reader) => {
                 match server_event {
                     Some(Ok(Message::Text(text))) => {
-                        if let Err(error) = handle_server_text(&mut app, &mut socket_writer, &text).await {
+                        if let Err(error) = handle_server_text(
+                            &mut app,
+                            &mut socket_writer,
+                            &mut simulator,
+                            &text,
+                        )
+                        .await
+                        {
                             disconnect_reason = Some(format!("Errore WebSocket: {error}"));
                         }
                     }
@@ -321,18 +343,19 @@ async fn run_dashboard(
     Ok(())
 }
 
-fn start_trip(
+async fn start_trip(
     app: &mut ClientApp,
     simulator: &mut Option<ActiveSimulator>,
+    socket_writer: &mut Option<SocketWriter>,
     route: RouteOption,
     speed_factor: u32,
-) {
+) -> anyhow::Result<()> {
     let route_points = match crate::movement::load_route(&route.path) {
         Ok(route_points) => route_points,
         Err(error) => {
             app.push_console(format!("Percorso non valido: {error}"));
             app.invalidate_active_trip("Il trip non è stato avviato.");
-            return;
+            return Ok(());
         }
     };
 
@@ -341,9 +364,13 @@ fn start_trip(
         Err(error) => {
             app.push_console(format!("Impossibile avviare il simulatore: {error}"));
             app.invalidate_active_trip("Il trip non è stato avviato.");
-            return;
+            return Ok(());
         }
     };
+
+    send_protocol_message(socket_writer, &WsClientMessage::StartTrip)
+        .await
+        .context("Impossibile richiedere al server l'avvio del trip")?;
 
     let (sender, receiver) = mpsc::channel(16);
     let task = tokio::spawn(route_simulator.start(sender));
@@ -352,6 +379,7 @@ fn start_trip(
         task: Some(task),
     });
     app.mark_trip_started(route.name, speed_factor);
+    Ok(())
 }
 
 async fn connect_socket(token: &str) -> anyhow::Result<(SocketWriter, SocketReader)> {
@@ -362,6 +390,13 @@ async fn connect_socket(token: &str) -> anyhow::Result<(SocketWriter, SocketRead
 
     let (socket, _) = connect_async(request).await?;
     Ok(socket.split())
+}
+
+fn is_user_already_connected(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<WebSocketError>(),
+        Some(WebSocketError::Http(response)) if response.status().as_u16() == 409
+    )
 }
 
 async fn send_protocol_message(
@@ -379,9 +414,13 @@ async fn send_protocol_message(
 async fn handle_server_text(
     app: &mut ClientApp,
     writer: &mut Option<SocketWriter>,
+    simulator: &mut Option<ActiveSimulator>,
     text: &str,
 ) -> anyhow::Result<()> {
     match serde_json::from_str::<WsServerMessage>(text) {
+        Ok(WsServerMessage::TripStarted) => {
+            app.push_console("Server: creazione del trip confermata.");
+        }
         Ok(WsServerMessage::PositionAccepted {
             stato,
             coord_ricevute,
@@ -399,6 +438,13 @@ async fn handle_server_text(
         }
         Ok(WsServerMessage::Error { code, message }) => {
             app.push_console(format!("Errore server [{code}]: {message}"));
+
+            if code == "trip_already_active" {
+                *simulator = None;
+                app.invalidate_active_trip(
+                    "Il simulatore è stato arrestato perché il server ha rifiutato il nuovo trip.",
+                );
+            }
         }
         Ok(WsServerMessage::DirectText {
             id,

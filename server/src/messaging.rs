@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
 use common::WsServerMessage;
 use sqlx::{Row, SqlitePool};
-use std::collections::HashMap;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use std::collections::{HashMap, hash_map::Entry};
 use thiserror::Error;
+use tokio::sync::{RwLock, broadcast, mpsc};
 
 // ============================================================================
 // MESSAGE ERRORS
@@ -65,11 +65,26 @@ impl MessageService {
         }
     }
 
-    pub async fn add_client(&self, user_id: UserId) -> mpsc::Receiver<WsServerMessage> {
-        let (tx, rx) = mpsc::channel::<WsServerMessage>(100);
+    // Usiamo la mappa clients per tenere un registro di utenti già attivi ed evitare una seconda connessione di un utente già online.
+    // Impediamo una seconda riconnessione.
+    pub async fn add_client(&self, user_id: UserId) -> Option<mpsc::Receiver<WsServerMessage>> {
         let mut clients = self.clients.write().await;
-        clients.insert(user_id, tx);
-        rx
+
+        match clients.entry(user_id) {
+            Entry::Occupied(_) => None,
+            Entry::Vacant(entry) => {
+                let (tx, rx) = mpsc::channel(100);
+                entry.insert(tx);
+                Some(rx)
+            }
+        }
+    }
+
+    pub async fn connected_users(&self) -> Vec<UserId> {
+        let clients = self.clients.read().await;
+        let mut users: Vec<_> = clients.keys().copied().collect();
+        users.sort_unstable(); // ordinamento non stabile degli id
+        users
     }
 
     pub async fn remove_client(&self, user_id: UserId) {
@@ -81,7 +96,11 @@ impl MessageService {
         self.broadcast_tx.subscribe()
     }
 
-    pub async fn handle_client_message(&self, user_id: UserId, text: &str) -> Result<(), MessageError> {
+    pub async fn handle_client_message(
+        &self,
+        user_id: UserId,
+        text: &str,
+    ) -> Result<(), MessageError> {
         let trimmed = text.trim();
 
         if trimmed.is_empty() {
@@ -104,11 +123,19 @@ impl MessageService {
         Ok(())
     }
 
-    pub async fn acknowledge_message(&self, user_id: UserId, message_id: i64) -> Result<(), MessageError> {
+    pub async fn acknowledge_message(
+        &self,
+        user_id: UserId,
+        message_id: i64,
+    ) -> Result<(), MessageError> {
         self.mark_as_read(message_id, user_id).await
     }
 
-    pub async fn send_admin_direct_message(&self, recipient_username: &str, content: &str) -> Result<i64, MessageError> {
+    pub async fn send_admin_direct_message(
+        &self,
+        recipient_username: &str,
+        content: &str,
+    ) -> Result<i64, MessageError> {
         let trimmed = content.trim();
         if trimmed.is_empty() {
             return Err(MessageError::ValidationError(
@@ -116,7 +143,9 @@ impl MessageService {
             ));
         }
 
-        let recipient_id = self.get_recipient_id_by_username(recipient_username).await?;
+        let recipient_id = self
+            .get_recipient_id_by_username(recipient_username)
+            .await?;
 
         let now = Utc::now();
         let msg_id = self
@@ -217,7 +246,10 @@ impl MessageService {
         Ok(())
     }
 
-    pub async fn get_unread_messages(&self, client_id: i64) -> Result<Vec<WsServerMessage>, MessageError> {
+    pub async fn get_unread_messages(
+        &self,
+        client_id: i64,
+    ) -> Result<Vec<WsServerMessage>, MessageError> {
         let rows = sqlx::query(
             r#"
             SELECT id, content, created_at_ms
@@ -236,9 +268,14 @@ impl MessageService {
                 let id: i64 = r.get("id");
                 let content: String = r.get("content");
                 let created_at_ms: i64 = r.get("created_at_ms");
-                let timestamp = DateTime::from_timestamp_millis(created_at_ms).unwrap_or_else(Utc::now);
+                let timestamp =
+                    DateTime::from_timestamp_millis(created_at_ms).unwrap_or_else(Utc::now);
 
-                WsServerMessage::DirectText { id, text: content, timestamp }
+                WsServerMessage::DirectText {
+                    id,
+                    text: content,
+                    timestamp,
+                }
             })
             .collect();
 
@@ -340,7 +377,13 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(Some(1), None, "client_to_server", "Messaggio client", Utc::now())
+            .save_message(
+                Some(1),
+                None,
+                "client_to_server",
+                "Messaggio client",
+                Utc::now(),
+            )
             .await
             .unwrap();
 
@@ -388,7 +431,13 @@ mod tests {
         let service = MessageService::new(db);
 
         let id = service
-            .save_message(None, Some(1), "direct", "Messaggio da confermare", Utc::now())
+            .save_message(
+                None,
+                Some(1),
+                "direct",
+                "Messaggio da confermare",
+                Utc::now(),
+            )
             .await
             .unwrap();
 
@@ -411,7 +460,9 @@ mod tests {
         let unread = service.get_unread_messages(1).await.unwrap();
         assert_eq!(unread.len(), 1);
         match &unread[0] {
-            WsServerMessage::DirectText { id: msg_id, text, .. } => {
+            WsServerMessage::DirectText {
+                id: msg_id, text, ..
+            } => {
                 assert_eq!(*msg_id, id);
                 assert_eq!(text, "Messaggio admin offline");
             }
@@ -430,5 +481,20 @@ mod tests {
         let long = "x".repeat(201);
         let too_long = service.handle_client_message(1, &long).await;
         assert!(matches!(too_long, Err(MessageError::ValidationError(_))));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_second_connection_for_the_same_user() {
+        let db = setup_in_memory_db().await;
+        let service = MessageService::new(db);
+
+        let first_connection = service.add_client(1).await;
+        let second_connection = service.add_client(1).await;
+
+        assert!(first_connection.is_some());
+        assert!(second_connection.is_none());
+
+        service.remove_client(1).await;
+        assert!(service.add_client(1).await.is_some());
     }
 }
