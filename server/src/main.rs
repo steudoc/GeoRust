@@ -1,4 +1,3 @@
-mod admin_dashboard;
 mod auth;
 mod cpu_usage;
 mod messaging;

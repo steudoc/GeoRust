@@ -87,6 +87,9 @@ async fn run_dashboard(
 ) -> anyhow::Result<()> {
     let mut app = ServerApp::new();
 
+    app.push_console("Server avviato con successo. In ascolto sulla porta 3000.");
+    app.push_console("Digita 'help' per vedere la lista dei comandi.");
+
     let mut background_tick = tokio::time::interval(Duration::from_secs(1));
     background_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -150,16 +153,16 @@ async fn run_dashboard(
 
                                                     // Mappatura della tipologia
                                                     let kind_str = match msg.kind.as_str() {
-                                                        "direct" => "OUTBOUND",
-                                                        "client_to_server" => "INBOUND", // se usi questo nel DB
+                                                        "direct" => "SERVER → USER",
+                                                        "client_to_server" => "USER → SERVER", // se usi questo nel DB
                                                         "broadcast" => "BROADCAST",
                                                         _ => "UNKNOWN",
                                                     };
 
                                                     // Stato di lettura
                                                     let read_status = match (kind_str, msg.is_read) {
-                                                        ("OUTBOUND", true) => " (READ)",
-                                                        ("OUTBOUND", false) => " (PENDING)",
+                                                        ("SERVER → USER", true) => " (READ)",
+                                                        ("SERVER → USER", false) => " (PENDING)",
                                                         _ => "",
                                                     };
 
@@ -194,7 +197,7 @@ async fn run_dashboard(
                                     }
                                     AppAction::CalculateStats { username, interval } => {
                                         if let Some(user_id) = app_state.get_user_id(&username).await {
-                                            app.push_console(format!("Calcolo statistiche per #{} ({})", user_id, interval));
+                                            app.push_console(format!("Calcolo statistiche per #{} {} ({})", user_id, username, interval));
                                             
                                             match stats::calculate_user_stats(&app_state.db, user_id, &interval).await {
                                                 Ok(res) => {

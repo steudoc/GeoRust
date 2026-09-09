@@ -342,7 +342,7 @@ impl AppState {
     }
 
     pub async fn get_msg(&self) -> Vec<MessageEntry> {
-        // estrae gli ultimi 15 messaggi dal DB
+        // estrae gli ultimi messaggi dal DB
         let query = r#"
             SELECT 
                 m.kind, 
@@ -354,7 +354,6 @@ impl AppState {
             FROM messages m
             LEFT JOIN users u ON u.id = m.sender_id OR u.id = m.recipient_id
             ORDER BY m.created_at_ms DESC 
-            LIMIT 15
         "#;
 
         let mut new_messages = Vec::new();
@@ -365,7 +364,6 @@ impl AppState {
                 let content: String = row.get("content");
                 let ts: i64 = row.get("created_at_ms");
                 let sender_id: Option<i64> = row.get("sender_id");
-                let recipient_id: Option<i64> = row.get("recipient_id");
                 let username: Option<String> = row.get("username");
                 
                 // converte il timestamp in "HH:MM:SS"
@@ -378,12 +376,10 @@ impl AppState {
                     (MessageKind::Broadcast, None, content)
                 } else if sender_id.is_none() {
                     // mittente NULL = Inviato dal Server a un utente
-                    let rec = recipient_id.unwrap_or(0);
-                    (MessageKind::Direct, username, format!("#{} {}", rec, content))
+                    (MessageKind::Direct, username, content)
                 } else {
                     // inviato da un utente verso il server
-                    let snd = sender_id.unwrap_or(0);
-                    (MessageKind::Received, username, format!("#{} {}", snd, content))
+                    (MessageKind::Received, username, content)
                 };
 
                 new_messages.push(MessageEntry {

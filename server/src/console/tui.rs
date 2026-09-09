@@ -7,7 +7,6 @@ use ratatui::{
 };
 
 use super::app::{ServerApp, InputMode, MessageKind};
-use super::AppState;
 
 pub(super) fn draw_dashboard(frame: &mut Frame, state: &mut ServerApp) {
     let main_chunks = Layout::default()
