@@ -365,7 +365,7 @@ impl ClientApp {
                 .with_timezone(&Local)
                 .format("%H:%M:%S")
                 .to_string(),
-            text: format!("#{id} {text}"),
+            text,
         });
         self.messages_scroll = 0;
     }
@@ -377,7 +377,7 @@ impl ClientApp {
                 .with_timezone(&Local)
                 .format("%H:%M:%S")
                 .to_string(),
-            text: format!("#{id} {text}"),
+            text,
         });
         self.messages_scroll = 0;
     }

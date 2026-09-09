@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+/*use std::{sync::Arc};
 use std::io;
 
 use crossterm::{
@@ -20,15 +20,15 @@ use crate::stats;
 use crate::AppState;
 use crate::messaging::MessageError;
 
-// STSTO INTERFACCIA
-struct TuiState {
-    input: String,
-    logs: Vec<String>,
-    should_quit: bool,
-    app_state: Arc<AppState>,
-    scroll_offset: u16,
-    active_users: Vec<i64>,
-    recent_messages: Vec<String>,
+// STATO INTERFACCIA
+pub struct TuiState {
+    pub input: String,
+    pub logs: Vec<String>,
+    pub should_quit: bool,
+    pub app_state: Arc<AppState>,
+    pub scroll_offset: u16,
+    pub active_users: Vec<i64>,
+    pub recent_messages: Vec<String>,
 }
 impl TuiState {
     fn new(app_state: Arc<AppState>) -> Self {
@@ -498,3 +498,4 @@ fn draw_ui(f: &mut ratatui::Frame, state: &mut TuiState) {
             .border_style(Style::default().fg(Color::Yellow)));
     f.render_widget(input_block, left_chunks[1]);
 }
+*/

@@ -140,7 +140,7 @@ mod tests {
         .unwrap();
 
         // richiediamo le stats per l'utente 1
-        let stats = calculate_user_stats(&pool, 1, "day").await.unwrap();
+        let stats = calculate_user_stats(&pool, 2, "day").await.unwrap();
 
         assert_eq!(stats.distance, 0.0);
         assert_eq!(stats.total_time, 0.0);

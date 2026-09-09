@@ -1,9 +1,10 @@
-mod admin;
+mod admin_dashboard;
 mod auth;
-mod info;
+mod cpu_usage;
 mod state;
 mod stats;
 mod messaging;
+mod console;
 #[cfg_attr(not(test), allow(dead_code))]
 mod trip;
 
@@ -40,7 +41,7 @@ use tracing_appender::rolling;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // crea un file di log giornaliero per gli eventi del server
+    // log su file
     let file_appender = rolling::daily("./logs", "websocket.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
@@ -49,26 +50,23 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .init();
 
-    let db_url = format!("sqlite://{DB_PATH}?mode=rw"); // mode read/write
+    // db
+    let db_url = format!("sqlite://{DB_PATH}?mode=rw");
+    let connection_options = SqliteConnectOptions::from_str(&db_url)?.foreign_keys(true);
 
-    // Configura le opzioni di connessione al database SQLite
-    let connection_options = SqliteConnectOptions::from_str(&db_url)?
-        .foreign_keys(true);
-
-    // Crea un pool di connessioni al database SQLite
     let pool = SqlitePoolOptions::new()
         .max_connections(50)
         .connect_with(connection_options)
         .await
         .map_err(|e| anyhow::anyhow!("Impossibile aprire {db_url}: {e}"))?;
 
-    // Crea le tabelle del database se non esistono già
     initialize_database(&pool).await?;
 
+    // creazione stato condiviso
     let state = AppState::new(pool.clone());
+    let admin_state = Arc::clone(&state); //copia per la tui
 
-    let admin_state = Arc::clone(&state);
-
+    // routes
     let app = Router::new()
         .route("/register", post(auth::register))
         .route("/login", post(auth::login))
@@ -78,20 +76,28 @@ async fn main() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     tracing::info!("Server running at http://0.0.0.0:3000");
 
-    // Lancia il logger della CPU in background
-    tokio::spawn(info::start_cpu_logger());
+    // CPU log in background
+    tokio::spawn(cpu_usage::start_cpu_logger());
 
+    // server web in background
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await; // Aspetta il segnale di spegnimento
+            })
+            .await;
+    });
 
-    // setup della CLI amministratore
-    tokio::spawn(admin::start_admin_console(admin_state, shutdown_tx));
+    // avvio tui
+    if let Err(e) = console::run(admin_state).await {
+        tracing::error!("Errore fatale nella console: {}", e);
+    }
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            let _ = shutdown_rx.await;
-        })
-        .await?;
+    let _ = shutdown_tx.send(());
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
+    println!("Server spento correttamente.");
     Ok(())
 }
 
