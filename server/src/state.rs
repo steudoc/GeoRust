@@ -393,7 +393,7 @@ impl AppState {
             }
         }
 
-        return new_messages;
+        new_messages
     }
 
     /// Rimuove dalla memoria il trip dell'utente senza salvarlo.

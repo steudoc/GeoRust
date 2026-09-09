@@ -15,7 +15,7 @@ fn determine_start_date(interval: &str) -> String {
         _ => now.to_string(),
     };
 
-    return start_date;
+    start_date
 }
 
 pub async fn get_distance(
