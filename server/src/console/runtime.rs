@@ -18,8 +18,8 @@ use super::{
     tui,
 };
 use crate::AppState;
-use crate::stats;
 use crate::console::app::StatType;
+use crate::stats;
 
 type AppTerminal = Terminal<CrosstermBackend<io::Stdout>>;
 
@@ -122,7 +122,7 @@ async fn run_dashboard(
                                 match app.submit_input() {
                                     AppAction::None => {}
                                     AppAction::Exit => should_quit = true,
-                                    
+
                                     // GESTIONE DEI COMANDI DEL SERVER:
                                     AppAction::SeeUsers => {
                                         let users = app_state.get_registered_users().await;
@@ -137,14 +137,14 @@ async fn run_dashboard(
                                     }
                                     AppAction::SeeLogs { username } => {
                                         app.push_console(format!("Estrazione ultimi 10 logs per utente {}...", username));
-                                        
+
                                         match app_state.get_user_logs(&username).await {
                                             Ok(messages) if messages.is_empty() => {
                                                 app.push_console(format!("Nessun messaggio trovato per l'utente '{}'.", username));
                                             }
                                             Ok(messages) => {
                                                 app.push_console("--------------------------------");
-                                                
+
                                                 for msg in messages {
                                                     // Formattazione della data
                                                     let time_str = match chrono::DateTime::from_timestamp_millis(msg.timestamp_ms) {
@@ -169,10 +169,10 @@ async fn run_dashboard(
 
                                                     // Push effettivo nella grafica
                                                     app.push_console(format!(
-                                                        "[{}] [{}] {}{}", 
-                                                        time_str, 
-                                                        kind_str, 
-                                                        msg.content, 
+                                                        "[{}] [{}] {}{}",
+                                                        time_str,
+                                                        kind_str,
+                                                        msg.content,
                                                         read_status
                                                     ));
                                                 }
@@ -202,7 +202,7 @@ async fn run_dashboard(
                                             app.push_console("------------------------------------------");
                                             app.push_console(format!("Username:            {}", username));
                                             app.push_console(format!("Periodo:             {}", interval));
-                                            
+
                                             match stat_type {
                                                 StatType::Tragitto => {
                                                     match stats::get_distance(&app_state.db, user_id, &interval).await {
@@ -246,11 +246,11 @@ async fn run_dashboard(
                                                     }
                                                 }
                                             }
-                                            
+
                                             app.push_console("--------------------------------");
                                         } else {
                                             app.push_console(format!("Errore: l'utente '{}' non esiste.", username));
-                                        }                               
+                                        }
                                     }
                                 }
                             }

@@ -1,5 +1,5 @@
 use chrono::{Datelike, Days, Utc};
-use sqlx::{Row};
+use sqlx::Row;
 
 fn determine_start_date(interval: &str) -> String {
     let now = Utc::now().date_naive();
@@ -18,7 +18,11 @@ fn determine_start_date(interval: &str) -> String {
     return start_date;
 }
 
-pub async fn get_distance(db: &sqlx::SqlitePool, user_id: i64, interval: &str) -> Result<f64, sqlx::Error> {
+pub async fn get_distance(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    interval: &str,
+) -> Result<f64, sqlx::Error> {
     let start_date = determine_start_date(interval);
 
     let row = sqlx::query(
@@ -36,7 +40,11 @@ pub async fn get_distance(db: &sqlx::SqlitePool, user_id: i64, interval: &str) -
     Ok(distance)
 }
 
-pub async fn get_durations(db: &sqlx::SqlitePool, user_id: i64, interval: &str) -> Result<(f64, f64), sqlx::Error> {
+pub async fn get_durations(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    interval: &str,
+) -> Result<(f64, f64), sqlx::Error> {
     let start_date = determine_start_date(interval);
 
     let row = sqlx::query(
@@ -55,10 +63,14 @@ pub async fn get_durations(db: &sqlx::SqlitePool, user_id: i64, interval: &str) 
     let total_pause: f64 = row.try_get("tot_pause")?;
     let moving_time: f64 = row.try_get("moving_time")?;
 
-    Ok((total_pause, moving_time)) 
+    Ok((total_pause, moving_time))
 }
 
-pub async fn get_avg_velocity(db: &sqlx::SqlitePool, user_id: i64, interval: &str) -> Result<f64, sqlx::Error> {
+pub async fn get_avg_velocity(
+    db: &sqlx::SqlitePool,
+    user_id: i64,
+    interval: &str,
+) -> Result<f64, sqlx::Error> {
     let distance = get_distance(db, user_id, interval).await?;
     let (_total_pause, moving_time) = get_durations(db, user_id, interval).await?;
 
@@ -69,7 +81,7 @@ pub async fn get_avg_velocity(db: &sqlx::SqlitePool, user_id: i64, interval: &st
         0.0
     };
 
-    Ok(avg_velocity) 
+    Ok(avg_velocity)
 }
 
 // ------------------------------
@@ -79,8 +91,8 @@ pub async fn get_avg_velocity(db: &sqlx::SqlitePool, user_id: i64, interval: &st
 mod tests {
     use super::*; // Importa le tre nuove funzioni
     use chrono::{Duration, Utc};
-    use sqlx::sqlite::SqlitePoolOptions;
     use sqlx::SqlitePool;
+    use sqlx::sqlite::SqlitePoolOptions;
 
     // Funzione helper per creare un DB in memoria pulito ad ogni test
     async fn setup_memory_db() -> SqlitePool {

@@ -1,15 +1,15 @@
 use anyhow::Context;
 use chrono::NaiveDate;
+use chrono::TimeZone;
 use common::{UserState, tracking::Coordinata};
-use sqlx::{SqlitePool, Row};
+use sqlx::{Row, SqlitePool};
 use std::collections::{HashMap, hash_map::Entry};
 use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
-use chrono::TimeZone;
 
+use crate::console::app::{MessageEntry, MessageKind};
 use crate::messaging::MessageService;
 use crate::trip::{Trip, TripError};
-use crate::console::app::{MessageEntry, MessageKind};
 
 type UserId = i64;
 
@@ -234,11 +234,12 @@ impl AppState {
 
     pub async fn get_connected_users(&self) -> Vec<(i64, String)> {
         let ids: Vec<i64> = self.message_service.connected_users().await;
-        
+
         let mut users = Vec::new();
 
         for id in ids {
-            let username = self.get_username_by_id(id)
+            let username = self
+                .get_username_by_id(id)
                 .await
                 .unwrap_or_else(|| format!("Utente #{}", id));
 
@@ -250,11 +251,11 @@ impl AppState {
 
     pub async fn get_username_by_id(&self, id: i64) -> Option<String> {
         // query_scalar estrae direttamente il valore della prima colonna (username)
-        let query_result: Result<Option<String>, sqlx::Error> = 
+        let query_result: Result<Option<String>, sqlx::Error> =
             sqlx::query_scalar("SELECT username FROM users WHERE id = ?1")
-            .bind(id)
-            .fetch_optional(&self.db)
-            .await;
+                .bind(id)
+                .fetch_optional(&self.db)
+                .await;
 
         match query_result {
             Ok(Some(username)) => Some(username), // Trovato!
@@ -289,7 +290,7 @@ impl AppState {
         }
     }
 
-    pub async fn get_user_logs(&self, username: &str) -> Result<Vec<LogMessage>, sqlx::Error>{
+    pub async fn get_user_logs(&self, username: &str) -> Result<Vec<LogMessage>, sqlx::Error> {
         let query_result = sqlx::query(
             r#"
             SELECT kind, content, created_at_ms, is_read
@@ -297,7 +298,7 @@ impl AppState {
             LEFT JOIN users u ON m.sender_id = u.id OR m.recipient_id = u.id
             ORDER BY created_at_ms ASC 
             LIMIT 10
-            "#
+            "#,
         )
         .bind(username)
         .fetch_all(&self.db)
@@ -320,10 +321,11 @@ impl AppState {
         let query_result = sqlx::query(
             "SELECT id 
             FROM users 
-            WHERE username = ?1")
-            .bind(username)
-            .fetch_optional(&self.db) 
-            .await;
+            WHERE username = ?1",
+        )
+        .bind(username)
+        .fetch_optional(&self.db)
+        .await;
 
         match query_result {
             Ok(Some(row)) => {
@@ -365,7 +367,7 @@ impl AppState {
                 let ts: i64 = row.get("created_at_ms");
                 let sender_id: Option<i64> = row.get("sender_id");
                 let username: Option<String> = row.get("username");
-                
+
                 // converte il timestamp in "HH:MM:SS"
                 let time_str = match chrono::Local.timestamp_millis_opt(ts) {
                     chrono::LocalResult::Single(dt) => dt.format("%H:%M:%S").to_string(),

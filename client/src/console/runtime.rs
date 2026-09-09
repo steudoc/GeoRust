@@ -454,10 +454,7 @@ async fn handle_server_text(
             app.add_direct_message(text, timestamp);
             send_protocol_message(writer, &WsClientMessage::DirectTextAck { id }).await?;
         }
-        Ok(WsServerMessage::BroadcastText {
-            text,
-            timestamp,
-        }) => {
+        Ok(WsServerMessage::BroadcastText { text, timestamp }) => {
             app.add_broadcast_message(text, timestamp);
         }
         Err(error) => {

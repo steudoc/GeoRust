@@ -1,17 +1,16 @@
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StatType {
     Tragitto,
     VelocitaMedia,
-    Durate, 
-    Tutto,  
+    Durate,
+    Tutto,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputMode {
     Command,
-    MessageSelection,   // scelta diretto (1) o broadcast (2)
-    TargetSelection,    // solo per msg diretti
+    MessageSelection, // scelta diretto (1) o broadcast (2)
+    TargetSelection,  // solo per msg diretti
     MessageWriting,
     StatsTypeSelection,
     TemporalSelection,
@@ -40,7 +39,7 @@ pub(super) enum AppAction {
         text: String,
     },
     SendBroadcast {
-        text: String
+        text: String,
     },
     CalculateStats {
         username: String,
@@ -49,7 +48,7 @@ pub(super) enum AppAction {
     },
     SeeUsers,
     SeeLogs {
-        username: String
+        username: String,
     },
     Exit,
 }
@@ -71,9 +70,7 @@ impl ServerApp {
     pub fn new() -> Self {
         Self {
             input: String::new(),
-            console_lines: vec![
-                "Avvio del server in corso...".to_string(),
-            ],
+            console_lines: vec!["Avvio del server in corso...".to_string()],
             messages: Vec::new(),
             input_mode: InputMode::Command,
             pending_username: None,
@@ -122,12 +119,12 @@ impl ServerApp {
                 self.push_console("  exit               Chiude il server");
                 self.push_console("-----------------------------------------------------------");
                 AppAction::None
-            },
+            }
             "users" => AppAction::SeeUsers,
             "logs" => {
                 let username = argument.to_string();
                 AppAction::SeeLogs { username }
-            },
+            }
             "stats" => {
                 if !argument.is_empty() {
                     let username = argument.to_string();
@@ -150,7 +147,7 @@ impl ServerApp {
                 self.push_console("  1. Diretto a un utente");
                 self.push_console("  2. Broadcast (a tutti)");
                 AppAction::None
-            },
+            }
             "exit" => AppAction::Exit,
             _ => {
                 self.push_console(format!("Comando sconosciuto: {command}. Digita 'help'."));
@@ -196,7 +193,7 @@ impl ServerApp {
 
     fn process_msg_writing(&mut self, value: &str) -> AppAction {
         self.input_mode = InputMode::Command; // Finito, si torna al menu
-        
+
         let text = value.to_string();
         let kind = self.pending_msg_kind.take();
         let username = self.pending_username.take();
@@ -225,7 +222,7 @@ impl ServerApp {
 
         self.pending_stat_type = Some(stat_type);
         self.input_mode = InputMode::TemporalSelection;
-        
+
         self.push_console("Seleziona l'intervallo temporale:");
         self.push_console("  Opzioni: day | week | month");
         AppAction::None
@@ -234,13 +231,16 @@ impl ServerApp {
     fn process_temporal_selection(&mut self, value: &str) -> AppAction {
         let interval = value.to_lowercase();
         if ["day", "week", "month"].contains(&interval.as_str()) {
-            
             self.input_mode = InputMode::Command;
-            
+
             let username = self.pending_username.take().unwrap_or("".to_string());
             let stat_type = self.pending_stat_type.take().unwrap_or(StatType::Tutto);
-            
-            AppAction::CalculateStats { username, stat_type, interval }
+
+            AppAction::CalculateStats {
+                username,
+                stat_type,
+                interval,
+            }
         } else {
             self.push_console("Valore non valido. Digita 'day', 'week' o 'month'.");
             AppAction::None

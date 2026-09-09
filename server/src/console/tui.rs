@@ -6,16 +6,16 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::app::{ServerApp, InputMode, MessageKind};
+use super::app::{InputMode, MessageKind, ServerApp};
 
 pub(super) fn draw_dashboard(frame: &mut Frame, state: &mut ServerApp) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // header
-            Constraint::Length(4),  // command
-            Constraint::Min(0),     // main content
-            Constraint::Length(3),  // footer
+            Constraint::Length(1), // header
+            Constraint::Length(4), // command
+            Constraint::Min(0),    // main content
+            Constraint::Length(3), // footer
         ])
         .split(frame.size());
 
@@ -25,7 +25,7 @@ pub(super) fn draw_dashboard(frame: &mut Frame, state: &mut ServerApp) {
     let center_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(50), 
+            Constraint::Percentage(50),
             Constraint::Percentage(35),
             Constraint::Percentage(15),
         ])
@@ -38,14 +38,13 @@ pub(super) fn draw_dashboard(frame: &mut Frame, state: &mut ServerApp) {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect) {
-    let header_spans =
-        Span::styled(
-            " GeoRust Admin Dashboard ",
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    let header_spans = Span::styled(
+        " GeoRust Admin Dashboard ",
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let line = Line::from(header_spans);
 
@@ -113,9 +112,21 @@ fn draw_messages(frame: &mut Frame, state: &mut ServerApp, area: Rect) {
     } else {
         for message in &state.messages {
             let (label, color) = match message.kind {
-                MessageKind::Direct => (format!("A: {}", message.target_username.as_deref().unwrap_or("Sconosciuto")), Color::Green),
+                MessageKind::Direct => (
+                    format!(
+                        "A: {}",
+                        message.target_username.as_deref().unwrap_or("Sconosciuto")
+                    ),
+                    Color::Green,
+                ),
                 MessageKind::Broadcast => ("Broadcast".to_string(), Color::Magenta),
-                MessageKind::Received => (format!("Da: {}", message.target_username.as_deref().unwrap_or("Sconosciuto")), Color::Yellow),
+                MessageKind::Received => (
+                    format!(
+                        "Da: {}",
+                        message.target_username.as_deref().unwrap_or("Sconosciuto")
+                    ),
+                    Color::Yellow,
+                ),
             };
             lines.push(Line::from(vec![
                 Span::styled(
@@ -147,7 +158,7 @@ fn draw_messages(frame: &mut Frame, state: &mut ServerApp, area: Rect) {
 
 fn draw_users(frame: &mut Frame, state: &ServerApp, area: Rect) {
     let mut lines = Vec::new();
-    
+
     if state.active_users.is_empty() {
         lines.push(Line::from(Span::styled(
             "Nessuno",
@@ -157,7 +168,11 @@ fn draw_users(frame: &mut Frame, state: &ServerApp, area: Rect) {
         for (id, username) in &state.active_users {
             lines.push(Line::from(vec![
                 Span::styled("🟢 ", Style::default().fg(Color::Green)),
-                Span::raw(format!("#{id} - {username}")).style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::raw(format!("#{id} - {username}")).style(
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]));
         }
     }
@@ -170,7 +185,7 @@ fn draw_users(frame: &mut Frame, state: &ServerApp, area: Rect) {
                 .border_style(Style::default().fg(Color::Green)),
         )
         .wrap(Wrap { trim: true });
-        
+
     frame.render_widget(panel, area);
 }
 
@@ -180,7 +195,9 @@ fn draw_input(frame: &mut Frame, state: &ServerApp, area: Rect) {
         InputMode::MessageSelection => " Messaggio [1] diretto, [2] broadcast ",
         InputMode::TargetSelection => " Destinatario ",
         InputMode::MessageWriting => " Testo ",
-        InputMode::StatsTypeSelection => " Tipo Interrogazione [1] Tragitto, [2] Velocità, [3] Durate, [4] Tutto ",
+        InputMode::StatsTypeSelection => {
+            " Tipo Interrogazione [1] Tragitto, [2] Velocità, [3] Durate, [4] Tutto "
+        }
         InputMode::TemporalSelection => " Finestra temporale [ day | week | month ] ",
     };
     let panel = Paragraph::new(format!("> {}", state.input))
