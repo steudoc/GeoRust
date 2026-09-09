@@ -3,8 +3,6 @@ mod auth;
 mod cpu_usage;
 mod messaging;
 mod console;
-mod info;
-mod messaging;
 mod state;
 mod stats;
 #[cfg_attr(not(test), allow(dead_code))]

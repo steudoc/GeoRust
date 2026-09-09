@@ -1,5 +1,3 @@
-use crate::messaging::MessageService;
-use crate::trip::{Trip, TripError};
 use anyhow::Context;
 use chrono::NaiveDate;
 use common::{UserState, tracking::Coordinata};
@@ -10,6 +8,7 @@ use tokio::sync::RwLock;
 use chrono::TimeZone;
 
 use crate::messaging::MessageService;
+use crate::trip::{Trip, TripError};
 use crate::console::app::{MessageEntry, MessageKind};
 
 type UserId = i64;
