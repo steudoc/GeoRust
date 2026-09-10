@@ -62,6 +62,18 @@ La comunicazione utilizza due protocolli differenti:
 
 ## 5. Simulazione del movimento
 
+Il movimento di un utente viene simulato attraverso percorsi memorizzati in file CSV nella cartella `data`. Ogni file rappresenta un tragitto ed è composto dalle colonne `time`, `latitude` e `longitude`: il tempo indica quando deve essere inviata una posizione rispetto all’inizio del viaggio, mentre latitudine e longitudine identificano la coordinata geografica. I percorsi disponibili vengono individuati automaticamente dall'interfaccia client e possono essere selezionati tramite il loro numero o il nome del file.
+
+Prima di avviare la simulazione, il client legge e valida l’intero percorso. Il file deve contenere almeno un punto, la prima posizione deve essere associata al tempo `00:00` e tutte le successive devono essere distanziate esattamente di 30 secondi. Viene inoltre verificata la validità delle coordinate geografiche. Sono ammesse coordinate consecutive uguali purché rispettino l’intervallo temporale di 30 secondi, questa situazione viene utilizzata per rappresentare i periodi in cui il veicolo rimane fermo.
+
+Dopo la validazione, il client invia al server il messaggio `StartTrip` e avvia il simulatore: il primo punto viene trasmesso immediatamente, per ciascun punto successivo il simulatore attende il tempo previsto e lo invia, tramite un canale asincrono, al ciclo di gestione del client. Questo componente gestisce gli eventi provenienti dalla tastiera, dal simulatore e dalla connessione WebSocket; quando riceve una nuova posizione la converte in un messaggio `PositionUpdate` e la trasmette al server, tramite WebSocket, insieme al tempo logico trascorso (non modificato da fattori di velocità).
+
+Anche il server verifica i tempi logici contenuti negli aggiornamenti: il primo punto deve avere tempo zero e ogni punto successivo deve avanzare di 30 secondi. In questo modo non si affida esclusivamente alla validazione eseguita dal client.
+
+Nelle build di debug è possibile scegliere un fattore di velocità che riduce il tempo di attesa reale tra due posizioni. Con un fattore `60`, ad esempio, i 30 secondi previsti dal percorso vengono riprodotti in 500 millisecondi. Questa accelerazione riguarda solamente l’esecuzione della simulazione: i tempi logici inviati al server rimangono invariati. Nelle build release il fattore è impostato automaticamente a `1` e le posizioni vengono quindi inviate in tempo reale ogni 30 secondi.
+
+Quando tutti i punti sono stati trasmessi, il client invia `TripCompleted`, permettendo al server di concludere e salvare il tragitto. Se il client viene chiuso o perde la connessione prima della fine, il simulatore viene arrestato e il messaggio di completamento non viene inviato; il server scarta quindi il tragitto interrotto senza salvarlo nel database.
+
 ## 6. Macchina a stati del tragitto
 
 ## 7. Persistenza e modello dei dati
