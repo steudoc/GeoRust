@@ -369,7 +369,8 @@ impl AppState {
                 u.username
             FROM messages m
             LEFT JOIN users u ON u.id = m.sender_id OR u.id = m.recipient_id
-            ORDER BY m.created_at_ms DESC 
+            ORDER BY m.created_at_ms DESC
+            LIMIT 100
         "#;
 
         let mut new_messages = Vec::new();
