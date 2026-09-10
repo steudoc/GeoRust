@@ -1,1 +1,0 @@
-# Progetto GeoRust - Report
