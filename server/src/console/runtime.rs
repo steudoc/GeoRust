@@ -218,7 +218,7 @@ async fn run_dashboard(
                                                 }
                                                 StatType::Durate => {
                                                     match stats::get_durations(&app_state.db, user_id, &interval).await {
-                                                        Ok((mov, pause)) => {
+                                                        Ok((pause, mov)) => {
                                                             app.push_console(format!("Tempo in movimento:  {:.2} s", mov));
                                                             app.push_console(format!("Tempo fermo:         {:.2} s", pause));
                                                         }
@@ -232,7 +232,7 @@ async fn run_dashboard(
 
                                                     // eseguite tutte in parallelo
                                                     match tokio::try_join!(dist_fut, dur_fut, vel_fut) {
-                                                        Ok((dist, (mov, pause), vel)) => {
+                                                        Ok((dist, (pause, mov), vel)) => {
                                                             let tot = mov + pause;
                                                             app.push_console(format!("Distanza:            {:.2} km", dist));
                                                             app.push_console(format!("Tempo in movimento:  {:.2} s", mov));
