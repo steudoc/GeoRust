@@ -17,6 +17,19 @@ type UserId = i64;
 pub async fn initialize_database(db: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            current_state TEXT NOT NULL DEFAULT 'disconnected'
+        );
+        "#,
+    )
+    .execute(db)
+    .await?;
+
+    sqlx::query(
+        r#"
         CREATE TABLE IF NOT EXISTS trips (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
@@ -296,6 +309,7 @@ impl AppState {
             SELECT kind, content, created_at_ms, is_read
             FROM messages m
             LEFT JOIN users u ON m.sender_id = u.id OR m.recipient_id = u.id
+            WHERE u.username = ?1
             ORDER BY created_at_ms ASC 
             LIMIT 10
             "#,
