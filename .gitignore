@@ -4,7 +4,5 @@
 *.sqlite3
 *.sqlite3-journal
 .env
-todo.md
 cpu_usage_log.txt
 *.log.*
-/TUI_CLIENT_GUIDA.md
