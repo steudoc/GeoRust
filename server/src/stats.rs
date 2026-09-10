@@ -143,7 +143,7 @@ mod tests {
         assert_eq!(distance, 15.0);
 
         // 2. Test Durate
-        let (moving, stopped) = get_durations(&pool, 1, "day").await.unwrap();
+        let (stopped, moving) = get_durations(&pool, 1, "day").await.unwrap();
         assert_eq!(moving, 1800.0);
         assert_eq!(stopped, 1800.0);
 
@@ -170,7 +170,7 @@ mod tests {
 
         // Richiediamo le stats per l'utente 1 (che non ha viaggi)
         let distance = get_distance(&pool, 1, "day").await.unwrap();
-        let (moving, stopped) = get_durations(&pool, 1, "day").await.unwrap();
+        let (stopped, moving) = get_durations(&pool, 1, "day").await.unwrap();
         let velocity = get_avg_velocity(&pool, 1, "day").await.unwrap();
 
         assert_eq!(distance, 0.0);
