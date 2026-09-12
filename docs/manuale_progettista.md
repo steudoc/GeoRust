@@ -80,6 +80,30 @@ Quando tutti i punti sono stati trasmessi, il client invia `TripCompleted`, perm
 
 ## 8. Sistema di messaggistica
 
+Il sistema di messaggistica permette alla console amministrativa e ai client connessi di comunicare tra loro. La console può inviare un messaggio diretto a un singolo utente oppure in broadcast verso tutti gli utenti connessi; il client, invece, può inviare testo soltanto al server. La comunicazione utilizza la connessione WebSocket.
+
+### 8.1 Gestione delle connessioni e canali Tokio
+
+Il server memorizza in `AppState` un'istanza di `MessageService`. Quando un client apre una connessione WebSocket, l'handler della socket chiede al servizio di associare la connessione all'utente. Il servizio crea un canale `tokio::sync::mpsc` per quel client e memorizza il `Sender` in una mappa indicizzata dall'identificativo dell'utente; il `Receiver` viene invece restituito all'handler della socket. 
+
+Per i messaggi broadcast viene usato un canale `tokio::sync::broadcast`. Ogni connessione possiede una propria sottoscrizione e riceve gli eventi pubblicati sul canale. 
+
+Quando la connessione WebSocket è attiva, l'handler ascolta sia i messaggi in ingresso sulla socket sia quelli pubblicati sul canale `mpsc` dell'utente e sul canale broadcast, utilizzando `tokio::select!`. I messaggi ricevuti dai canali vengono serializzati in JSON tramite il crate `serde` e inviati sulla WebSocket. Quando la connessione termina, il client viene rimosso dal registro.
+
+### 8.3 Persistenza e consegna
+
+Tutti i messaggi vengono memorizzati nella tabella `messages` di SQLite con il tipo, il testo, la data di creazione, gli identificativi di mittente e destinatario e un flag di lettura. Il tipo può essere `client_to_server`, `direct` o `broadcast`.
+
+Un messaggio diretto viene inizialmente marcato come non letto. Quando il client lo riceve, invia un messaggio di acknowledgment specificando l'identificativo del messaggio ricevuto; il server aggiorna il flag di lettura del messaggio. Questa scelta permette di non perdere i messaggi diretti quando il destinatario è offline. Alla successiva connessione il server recupera i record non letti e li invia in ordine cronologico. I messaggi broadcast invece vengono consegnati agli utenti iscritti al momento della pubblicazione e non vengono riproposti dopo una disconnessione.
+
+La console accede periodicamente alla tabella dei messaggi per mostrare all'amministratore i messaggi inviati e ricevuti.
+
+### 8.4 Validazione e gestione degli errori
+
+Il server rifiuta i messaggi vuoti e quelli più lunghi di 200 caratteri. Inoltre non accetta l'invio di messaggi a client inesistenti. Il servizio di messaggistica può produrre gli errori `ValidationError`, `NotFound` e `DatabaseError`. Gli errori di validazione vengono restituiti al client tramite un messaggio di errore con codice `validation_error`; gli errori relativi all'utente destinatario utilizzano invece il codice `not_found`. Gli errori SQLite vengono registrati nei log e comunicati all'esterno con il codice generico `internal_error`.
+
+Infine, un errore durante la serializzazione o l'invio di un messaggio al client interrompe la connessione; i messaggi diretti già salvati rimangono però disponibili per la consegna successiva.
+
 ## 9. Interfacce testuali
 
 ## 10. Verifica e test
