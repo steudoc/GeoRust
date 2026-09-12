@@ -15,7 +15,12 @@
   - [4.4 Ciclo della connessione](#44-ciclo-della-connessione)
 - [5. Simulazione del movimento](#5-simulazione-del-movimento)
 - [6. Macchina a stati del tragitto](#6-macchina-a-stati-del-tragitto)
+  - [6.1 Transizioni di stato](#61-transizioni-di-stato)
+  - [6.2 Calcolo della distanza](#62-calcolo-della-distanza)
 - [7. Persistenza e modello dei dati](#7-persistenza-e-modello-dei-dati)
+  - [7.1 Struttura del database](#71-struttura-del-database)
+  - [7.2 Salvataggio dei tragitti](#72-salvataggio-dei-tragitti)
+  - [7.3 Elaborazione delle statistiche](#73-elaborazione-delle-statistiche)
 - [8. Sistema di messaggistica](#8-sistema-di-messaggistica)
   - [8.1 Gestione delle connessioni e canali Tokio](#81-gestione-delle-connessioni-e-canali-tokio)
   - [8.2 Persistenza e consegna](#82-persistenza-e-consegna)
@@ -163,7 +168,56 @@ Quando tutti i punti sono stati trasmessi, il client invia `TripCompleted`, perm
 
 ## 6. Macchina a stati del tragitto
 
+La logica di un tragitto è implementata nel tipo `Trip`. Ogni istanza è associata all’identificativo dell’utente e conserva le posizioni ricevute, lo stato corrente, il tempo di movimento, il tempo di pausa e l’eventuale periodo di immobilità che non ha ancora raggiunto la soglia dei tre minuti.
+
+### 6.1 Transizioni di stato
+
+Un nuovo tragitto nasce nello stato `Disconnected`. La prima posizione deve avere tempo logico pari a zero e porta lo stato a `Still`, senza aggiungere secondi al tempo di pausa. Da quel momento lo stato viene aggiornato confrontando ogni coordinata con quella precedente.
+
+| Stato corrente | Evento | Risultato |
+|---|---|---|
+| `Still` | La coordinata non cambia | Lo stato rimane `Still` e i 30 secondi trascorsi vengono aggiunti al tempo di pausa. |
+| `Still` | La coordinata cambia | Lo stato passa a `Moving` e l’intervallo viene aggiunto al tempo di movimento. |
+| `Moving` | La coordinata cambia | Lo stato rimane `Moving` e viene aggiornato il tempo di movimento. |
+| `Moving` | La coordinata non cambia per meno di tre minuti | Il tempo trascorso viene mantenuto temporaneamente in attesa di conoscere la posizione successiva. |
+| `Moving` | La coordinata non cambia per almeno tre minuti | Lo stato passa a `Still` e l’intero periodo di immobilità viene attribuito al tempo di pausa. |
+
+La durata in cui un utente in movimento mantiene la stessa coordinata viene accumulata in `pending_still_time`. Se il movimento riprende prima di 180 secondi, questo periodo non costituisce una pausa secondo la definizione adottata e viene sommato al tempo di movimento. Se invece si raggiungono i 180 secondi, il periodo viene assegnato retroattivamente al tempo di pausa e lo stato diventa `Still`.
+
+Al completamento del tragitto lo stato torna a `Disconnected`. Un eventuale periodo di immobilità inferiore alla soglia viene conteggiato come movimento prima di produrre il riepilogo finale.
+
+### 6.2 Calcolo della distanza
+
+La distanza totale viene calcolata sommando la distanza tra ogni coppia di coordinate consecutive. Per ciascun segmento viene applicata la formula di Haversine, utilizzando un raggio terrestre di 6.371 km. Le coordinate ripetute producono un segmento di lunghezza nulla, mentre il risultato complessivo viene arrotondato a due cifre decimali.
+
 ## 7. Persistenza e modello dei dati
+
+La persistenza è affidata a SQLite tramite il crate SQLx. All’avvio il server apre il file `db.sqlite` in modalità lettura e scrittura e crea, se non sono già presenti, le tabelle e l’indice necessari. Il file deve quindi esistere prima dell’avvio del server, mentre lo schema viene inizializzato dal programma.
+
+### 7.1 Struttura del database
+
+| Tabella | Contenuto |
+|---|---|
+| `users` | Identificativo, username, hash della password e colonna `current_state`. |
+| `trips` | Utente, data del tragitto, distanza totale, secondi di movimento e secondi di pausa. |
+| `trips_points` | Indice del punto, tempo logico e coordinate associate a un tragitto. |
+| `messages` | Mittente, destinatario, tipo, contenuto, data di creazione e stato di lettura del messaggio. |
+
+Le tabelle `trips` e `messages` fanno riferimento agli utenti registrati. Ogni riga di `trips_points` è invece collegata a un tragitto tramite il suo identificativo e utilizza, insieme all’indice del punto, una chiave primaria composta. Sono presenti vincoli sui valori numerici e sulle coordinate, oltre alle chiavi esterne abilitate durante l’apertura del database.
+
+La colonna `users.current_state` fa parte dello schema, ma non viene utilizzata per stabilire quali utenti siano online. Questa informazione viene ricavata dalla mappa delle connessioni WebSocket attive, in modo che la console mostri lo stato effettivo delle connessioni presenti in quel momento.
+
+### 7.2 Salvataggio dei tragitti
+
+I tragitti in corso vengono mantenuti in memoria all’interno di `AppState`. Quando il server riceve `TripCompleted`, produce il riepilogo e salva prima i dati aggregati nella tabella `trips`, quindi inserisce tutte le coordinate nella tabella `trips_points`. Le operazioni vengono eseguite nella stessa transazione SQL: se uno degli inserimenti fallisce, la transazione non viene completata e non rimangono dati parziali nel database.
+
+Dopo un salvataggio riuscito il tragitto viene rimosso dalla memoria. I punti restano disponibili nel database per una futura ricostruzione del percorso, anche se l’attuale console amministrativa utilizza soltanto i valori aggregati presenti in `trips`. Un tragitto interrotto senza il messaggio di completamento viene invece eliminato dalla memoria senza essere salvato.
+
+### 7.3 Elaborazione delle statistiche
+
+La console amministrativa permette di interrogare le statistiche di uno specifico utente per il giorno, la settimana o il mese corrente. Per la settimana viene considerato come inizio il lunedì, mentre per il mese viene utilizzato il primo giorno. Le query sommano la distanza, il tempo di movimento e il tempo di pausa dei tragitti compresi nel periodo selezionato.
+
+La velocità media viene calcolata dividendo la distanza complessiva per il solo tempo trascorso in movimento e convertendo il risultato in chilometri orari. Le pause non entrano quindi nel denominatore; se non è presente alcun tempo di movimento, il valore restituito è zero.
 
 ## 8. Sistema di messaggistica
 
