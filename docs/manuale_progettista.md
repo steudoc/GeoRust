@@ -26,8 +26,15 @@
   - [8.2 Persistenza e consegna](#82-persistenza-e-consegna)
   - [8.3 Validazione e gestione degli errori](#83-validazione-e-gestione-degli-errori)
 - [9. Interfacce testuali](#9-interfacce-testuali)
+  - [9.1 Interfaccia del client](#91-interfaccia-del-client)
+  - [9.2 Interfaccia del server](#92-interfaccia-del-server)
+  - [9.3 Gestione del terminale e degli eventi](#93-gestione-del-terminale-e-degli-eventi)
 - [10. Verifica e test](#10-verifica-e-test)
+- [10. Verifica e test](#10-verifica-e-test-1)
 - [11. Prestazioni e dimensione degli eseguibili](#11-prestazioni-e-dimensione-degli-eseguibili)
+  - [11.1 Registrazione dell’utilizzo della CPU](#111-registrazione-dellutilizzo-della-cpu)
+  - [11.2 Scelte relative alle prestazioni](#112-scelte-relative-alle-prestazioni)
+  - [11.3 Dimensione degli eseguibili](#113-dimensione-degli-eseguibili)
 - [12. Valutazione finale](#12-valutazione-finale)
 
 ## 1. Introduzione
@@ -54,7 +61,7 @@ L’applicazione utilizza Tokio per coordinare le attività che devono procedere
 | Controllo del consumo di CPU | Il server registra ogni 120 secondi l’utilizzo della CPU, una stima del tempo CPU impiegato nell’ultimo intervallo e la stima cumulativa dall’avvio del processo. |
 | Esecuzione su almeno due piattaforme | La compilazione e i controlli automatici vengono eseguiti tramite GitHub Actions su Windows e Ubuntu. |
 
-Per rendere la simulazione ripetibile è stata scelta l’emulazione tramite file CSV. Gli stessi percorsi possono così essere eseguiti più volte e produrre risultati confrontabili. Nelle build di debug è inoltre disponibile un *fattore di velocità* che riduce i tempi di attesa reali senza modificare i tempi logici inviati al server.
+Per rendere la simulazione ripetibile è stata scelta l’emulazione tramite file CSV. Gli stessi percorsi possono così essere eseguiti più volte e produrre risultati confrontabili. Nelle build di debug è inoltre disponibile un **fattore di velocità** che riduce i tempi di attesa reali senza modificare i tempi logici inviati al server.
 
 I dati relativi agli utenti, ai tragitti e ai messaggi vengono salvati in SQLite. Le informazioni che dipendono dalle connessioni attive, come gli utenti online e i token di autenticazione, vengono invece mantenute in memoria dal server.
 
@@ -247,8 +254,96 @@ Infine, un errore durante la serializzazione o l'invio di un messaggio al client
 
 ## 9. Interfacce testuali
 
+Il client e il server dispongono di interfacce testuali costruite con Ratatui e Crossterm. In entrambi i casi il codice è diviso tra stato dell’applicazione, gestione degli eventi e rendering: i moduli `app.rs` interpretano i comandi e aggiornano lo stato, i moduli `runtime.rs` coordinano le operazioni asincrone e `ui.rs` o `tui.rs` definiscono la disposizione degli elementi sul terminale.
+
+### 9.1 Interfaccia del client
+
+All’avvio il client mostra una schermata di autenticazione dalla quale è possibile effettuare il login o registrare un nuovo account. La password viene mascherata durante l’inserimento e, al termine di una registrazione, viene eseguito automaticamente il login.
+
+Dopo l’autenticazione viene visualizzata la dashboard principale. L’intestazione mostra l’utente e lo stato della connessione; la parte centrale è divisa tra la console, che occupa il 60% dello spazio, e l’elenco dei messaggi, che occupa il restante 40%. La riga di input rimane disponibile anche durante un tragitto, permettendo all’utente di continuare a inviare messaggi al server.
+
+I comandi disponibili sono `help`, `msg <testo>`, `start` ed `exit`. Il comando `start` avvia la scelta del percorso e, nelle build di debug, del fattore di velocità. I messaggi diretti, i broadcast e i messaggi inviati vengono rappresentati con stili differenti, mentre lo scorrimento della console e dell’elenco dei messaggi può essere controllato tramite tastiera o rotellina del mouse.
+
+### 9.2 Interfaccia del server
+
+La console amministrativa viene eseguita nello stesso processo del server. La schermata è divisa in una console per i comandi, un pannello con i messaggi e un elenco degli utenti online. Questi ultimi vengono ricavati dalle connessioni WebSocket attive, mentre la cronologia mostrata nel pannello dei messaggi viene aggiornata ogni secondo.
+
+L’amministratore può visualizzare gli utenti registrati con `users`, consultare fino a 10 messaggi associati a un utente con `logs <username>`, richiedere le statistiche con `stats <username>` e inviare messaggi diretti o broadcast tramite `msg`. Il comando `exit` chiude la console e attiva l’arresto controllato del server HTTP.
+
+### 9.3 Gestione del terminale e degli eventi
+
+Crossterm abilita la modalità raw, lo schermo alternativo e la lettura asincrona di tastiera e mouse tramite `EventStream`. Le interfacce utilizzano `tokio::select!` per attendere contemporaneamente gli eventi del terminale e quelli prodotti dalle altre attività dell’applicazione. Una struttura `TerminalSession` si occupa dell’inizializzazione e implementa `Drop` per ripristinare il terminale anche quando l’esecuzione termina a causa di un errore.
+
 ## 10. Verifica e test
+
+## 10. Verifica e test
+
+I test automatici sono distribuiti nei tre crate e verificano soprattutto le parti che contengono regole applicative. Il crate `common` controlla la validazione delle coordinate e la serializzazione dei messaggi; il client verifica la lettura dei CSV, la temporizzazione del simulatore e l’interpretazione dei comandi; il server copre la macchina a stati, il calcolo delle statistiche, la persistenza dei tragitti e il servizio di messaggistica.
+
+I test che richiedono SQLite utilizzano database in memoria, evitando di modificare il file impiegato dall’applicazione. Per verificare il simulatore vengono inoltre usati i controlli temporali di Tokio, che permettono di avanzare il tempo dei test senza attendere realmente tutti gli intervalli del percorso.
+
+La suite corrente comprende 59 test:
+
+| Crate | Test |
+|---|---:|
+| `common` | 8 |
+| `client` | 25 |
+| `server` | 26 |
+
+I controlli locali utilizzati per la revisione del workspace sono:
+
+```text
+cargo check --workspace --all-targets
+cargo test --workspace --all-targets
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+La pipeline GitHub Actions esegue questi controlli su `windows-latest` e `ubuntu-latest` per push e pull request relativi ai branch `dev` e `main`, oltre a consentire l’avvio manuale. I job delle due piattaforme sono indipendenti e utilizzano una cache per le dipendenze e la cartella `target`. La build release completa viene eseguita per i push su `main` e per le pull request dirette a `main`; quando parte una nuova esecuzione sullo stesso riferimento, quella precedente viene annullata per evitare lavoro duplicato.
+
+Non sono presenti test di integrazione che avviano realmente server e client come processi separati. Le interazioni complete, come la riconnessione, il rifiuto delle connessioni duplicate e la consegna dei messaggi tra più client, vengono quindi controllate anche tramite prove manuali.
 
 ## 11. Prestazioni e dimensione degli eseguibili
 
+### 11.1 Registrazione dell’utilizzo della CPU
+
+All’avvio del server viene avviato un task dedicato al monitoraggio della CPU. Ogni 120 secondi il modulo `cpu_usage.rs` interroga `sysinfo` per ottenere l’utilizzo del processo e aggiunge una riga al file `logs/cpu_usage_log.txt`. Ogni registrazione contiene data e ora, PID, percentuale di utilizzo, uptime del processo, stima del tempo CPU impiegato nell’ultimo intervallo e stima cumulativa dall’avvio del logger.
+
+Il tempo relativo all’intervallo viene stimato moltiplicando la percentuale di utilizzo per i 120 secondi trascorsi. Il valore cumulativo è la somma delle stime prodotte nei diversi intervalli: non rappresenta quindi una misura esatta fornita dal sistema operativo, ma un’indicazione dell’attività del processo nel corso dell’esecuzione.
+
+### 11.2 Scelte relative alle prestazioni
+
+Le operazioni di rete e di accesso ai dati sono asincrone, così una connessione in attesa non blocca l’elaborazione delle altre. Il server utilizza un pool SQLite con un massimo di 50 connessioni e canali con capacità limitata per la comunicazione interna. Anche i dati caricati periodicamente dalla console sono limitati: la dashboard mostra gli ultimi 100 messaggi e il comando `logs` recupera fino a 10 messaggi associati all’utente richiesto.
+
+Non sono stati introdotti benchmark sintetici, perché il carico previsto per il progetto è contenuto. La valutazione si basa sui test automatici, sul monitoraggio periodico della CPU e sulla dimensione delle build release.
+
+### 11.3 Dimensione degli eseguibili
+
+Le dimensioni sono state misurate il 12 settembre 2026 dopo l’esecuzione di `cargo build --workspace --release`, su Windows x86-64 con toolchain Rust 1.94.1:
+
+| Eseguibile | Dimensione in byte | Dimensione in MiB |
+|---|---:|---:|
+| `client.exe` | 4.201.472 | 4,01 |
+| `server.exe` | 6.808.064 | 6,49 |
+
+Il crate `common` è una libreria collegata ai due programmi e non produce un eseguibile autonomo. Le dimensioni riportate dipendono dalla piattaforma, dal compilatore e dalle versioni delle dipendenze, quindi possono variare in build eseguite in ambienti differenti.
+
 ## 12. Valutazione finale
+
+L’implementazione copre le funzionalità richieste: registrazione e autenticazione, ricezione periodica delle posizioni, gestione degli stati, analisi dei tragitti e comunicazione testuale. La separazione nei tre crate mantiene condiviso il protocollo senza mescolare la logica del client con quella del server. L’uso di Tokio permette inoltre di gestire nello stesso programma connessioni, interfaccia testuale e attività periodiche senza ricorrere a un thread dedicato per ogni operazione.
+
+Le principali scelte progettuali presentano vantaggi e limiti coerenti con le dimensioni del progetto:
+
+| Scelta | Vantaggio | Limite |
+|---|---|---|
+| Percorsi CSV | Simulazioni ripetibili e facilmente verificabili. | I percorsi devono essere preparati in anticipo e rispettare il formato previsto. |
+| SQLite | Persistenza locale semplice e disponibile su entrambe le piattaforme verificate. | Lo schema non dispone di migrazioni versionate e il database rimane legato alla singola istanza del server. |
+| Token e utenti online in memoria | Gestione diretta e coerente con le WebSocket attive. | I token vengono persi al riavvio e le sessioni devono essere autenticate nuovamente. |
+| WebSocket e canali Tokio | Comunicazione bidirezionale senza richieste ripetute e separazione tra messaggi diretti e broadcast. | I broadcast non vengono recuperati dagli utenti che erano offline. |
+| Salvataggio al completamento | I dati del tragitto e i relativi punti vengono inseriti in un’unica transazione. | Un tragitto interrotto viene scartato interamente. |
+| Interfacce testuali | Uso di librerie multipiattaforma senza dipendenze da un ambiente grafico specifico. | Non è disponibile una rappresentazione grafica dei percorsi. |
+| Test unitari e CI multipiattaforma | Le regole principali vengono verificate automaticamente a ogni modifica. | Mancano test end-to-end tra processi client e server reali. |
+
+Alcune informazioni sono già predisposte per sviluppi successivi. In particolare, la tabella `trips_points` conserva tutte le coordinate dei tragitti completati, anche se l’interfaccia attuale utilizza soltanto i valori aggregati presenti in `trips`. Questi dati potrebbero essere impiegati per ricostruire e visualizzare graficamente i percorsi.
+
+Ulteriori evoluzioni potrebbero riguardare la persistenza o la scadenza dei token, l’introduzione di migrazioni per lo schema SQLite, la configurazione esterna dei percorsi e test di integrazione completi. La soluzione attuale mantiene però un perimetro adeguato al progetto: le componenti principali sono separate, le regole sul movimento sono verificabili e i dati conclusivi vengono salvati senza lasciare registrazioni parziali.
