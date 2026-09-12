@@ -1,6 +1,6 @@
-# GeoRust - Manuale del progettista<!-- omit in toc -->
+# GeoRust - Manuale del progettista <!-- omit in toc -->
 
-## Indice<!-- omit in toc -->
+## Indice <!-- omit in toc -->
 
 - [1. Introduzione](#1-introduzione)
 - [2. Analisi dei requisiti](#2-analisi-dei-requisiti)
@@ -8,7 +8,7 @@
   - [3.1 Crate `common`](#31-crate-common)
   - [3.2 Crate `client`](#32-crate-client)
   - [3.3 Crate `server`](#33-crate-server)
-- [4. Protocollo client-server](#4-protocollo-client-server)
+- [4. Comunicazione tra client e server](#4-comunicazione-tra-client-e-server)
   - [4.1 Registrazione e autenticazione](#41-registrazione-e-autenticazione)
   - [4.2 Apertura della WebSocket](#42-apertura-della-websocket)
   - [4.3 Messaggi scambiati](#43-messaggi-scambiati)
@@ -30,7 +30,6 @@
   - [9.2 Interfaccia del server](#92-interfaccia-del-server)
   - [9.3 Gestione del terminale e degli eventi](#93-gestione-del-terminale-e-degli-eventi)
 - [10. Verifica e test](#10-verifica-e-test)
-- [10. Verifica e test](#10-verifica-e-test-1)
 - [11. Prestazioni e dimensione degli eseguibili](#11-prestazioni-e-dimensione-degli-eseguibili)
   - [11.1 Registrazione dell’utilizzo della CPU](#111-registrazione-dellutilizzo-della-cpu)
   - [11.2 Scelte relative alle prestazioni](#112-scelte-relative-alle-prestazioni)
@@ -41,7 +40,7 @@
 
 GeoRust è un’applicazione client/server sviluppata in Rust per simulare la geolocalizzazione e la comunicazione di una flotta di veicoli. Ogni client rappresenta un utente registrato che, dopo l’autenticazione, può avviare un tragitto, trasmettere periodicamente la propria posizione e inviare messaggi al server.
 
-Il movimento viene simulato leggendo una sequenza di coordinate da un file CSV. Ogni posizione è associata a un tempo logico e viene inviata al server rispettando intervalli di 30 secondi. Durante il tragitto, il server determina lo stato dell’utente, calcola la distanza percorsa e distingue il tempo trascorso in movimento da quello trascorso in pausa.
+Il movimento viene simulato leggendo una sequenza di coordinate da un file CSV. Ogni posizione è associata a un tempo logico e viene inviata al server rispettando intervalli logici di 30 secondi. Durante il tragitto, il server determina lo stato dell’utente, calcola la distanza percorsa e distingue il tempo trascorso in movimento da quello trascorso in pausa.
 
 Il server gestisce inoltre la registrazione e l’autenticazione degli utenti, la persistenza dei dati in un database SQLite, l’elaborazione delle statistiche e lo scambio di messaggi diretti o broadcast. Sia il client sia il server dispongono di un’interfaccia testuale realizzata con Ratatui e Crossterm.
 
@@ -55,15 +54,15 @@ L’applicazione utilizza Tokio per coordinare le attività che devono procedere
 | Geolocalizzazione degli utenti | Il client legge le coordinate da percorsi CSV e le invia al server attraverso una connessione WebSocket. |
 | Invio della posizione ogni 30 secondi | Ogni punto del percorso contiene un tempo logico. Il client e il server verificano che le posizioni siano distanziate esattamente di 30 secondi. |
 | Gestione degli stati dell’utente | Il server utilizza gli stati `Disconnected`, `Moving` e `Still`. Il passaggio a `Moving` avviene al primo cambiamento di coordinate, mentre il passaggio a `Still` avviene dopo tre minuti senza variazioni delle coordinate inviate. |
-| Analisi del movimento | Per ogni tragitto vengono calcolati la distanza percorsa, il tempo di movimento, il tempo di pausa e la velocità media. |
+| Analisi del movimento | Per ogni tragitto completato vengono calcolati e salvati la distanza percorsa, il tempo di movimento e il tempo di pausa. La velocità media viene ricavata dalle statistiche aggregate del periodo selezionato. |
 | Intervalli temporali programmabili | La console amministrativa del server consente di richiedere le statistiche relative al giorno, alla settimana o al mese corrente di uno specifico utente. |
 | Comunicazione con gli utenti | Il server può inviare messaggi diretti oppure broadcast ai client. I client possono inviare messaggi testuali solamente al server. |
 | Controllo del consumo di CPU | Il server registra ogni 120 secondi l’utilizzo della CPU, una stima del tempo CPU impiegato nell’ultimo intervallo e la stima cumulativa dall’avvio del processo. |
 | Esecuzione su almeno due piattaforme | La compilazione e i controlli automatici vengono eseguiti tramite GitHub Actions su Windows e Ubuntu. |
 
-Per rendere la simulazione ripetibile è stata scelta l’emulazione tramite file CSV. Gli stessi percorsi possono così essere eseguiti più volte e produrre risultati confrontabili. Nelle build di debug è inoltre disponibile un **fattore di velocità** che riduce i tempi di attesa reali senza modificare i tempi logici inviati al server.
+Per rendere la simulazione ripetibile è stata scelta l’emulazione tramite file CSV. Gli stessi percorsi possono così essere eseguiti più volte e produrre risultati confrontabili. Nelle build di debug è inoltre disponibile un *fattore di velocità* che riduce i tempi di attesa reali senza modificare i tempi logici inviati al server.
 
-I dati relativi agli utenti, ai tragitti e ai messaggi vengono salvati in SQLite. Le informazioni che dipendono dalle connessioni attive, come gli utenti online e i token di autenticazione, vengono invece mantenute in memoria dal server.
+I dati relativi agli utenti, ai tragitti e ai messaggi vengono salvati in SQLite. L’elenco degli utenti online viene invece ricavato dalle connessioni WebSocket attive. Anche i token di autenticazione sono conservati in memoria e vengono quindi persi al riavvio del server.
 
 ## 3. Architettura del sistema
 
@@ -112,13 +111,15 @@ Il crate `server` espone le API REST e l’endpoint WebSocket, autentica le conn
 | `server/src/console/runtime.rs` | Coordina gli eventi della console e richiama le funzionalità relative a utenti, messaggi e statistiche. |
 | `server/src/console/tui.rs` | Definisce il layout e il rendering della console amministrativa. |
 
-## 4. Protocollo client-server
+Lo stato utilizzato dagli handler di Axum è raccolto in `AppState` e condiviso tramite `Arc`, così le diverse attività possono accedere alla stessa istanza senza trasferirne la proprietà. Le mappe modificabili durante l’esecuzione sono protette da `Mutex` o `RwLock`: i token, i tragitti attivi e le connessioni degli utenti possono quindi essere consultati e aggiornati in modo controllato dalle operazioni concorrenti. Il pool SQLite è gestito da SQLx e viene condiviso con i servizi che accedono al database.
+
+## 4. Comunicazione tra client e server
 
 La comunicazione tra client e server avviene in due fasi. Le operazioni iniziali di registrazione e login utilizzano richieste REST su HTTP, mentre le posizioni e i messaggi vengono scambiati attraverso una connessione WebSocket persistente.
 
 ### 4.1 Registrazione e autenticazione
 
-Il server espone gli endpoint `POST /register` e `POST /login`. La registrazione riceve username e password, verifica che i dati non siano vuoti e salva la password sotto forma di hash generato con Argon2. Dopo una registrazione completata, il client esegue automaticamente il login.
+Il server espone gli endpoint `POST /register` e `POST /login`. La registrazione riceve username e password, verifica che i dati non siano vuoti e salva la password sotto forma di hash Argon2 generato con un salt casuale. Dopo una registrazione completata, il client esegue automaticamente il login.
 
 Durante il login il server confronta la password ricevuta con l’hash memorizzato nel database. Se le credenziali sono valide, genera un token UUID e lo associa all’identificativo dell’utente. Il token viene mantenuto in memoria dal server e restituito al client insieme allo `user_id`.
 
@@ -161,11 +162,11 @@ Se la connessione viene interrotta durante la simulazione, il client arresta il 
 
 ## 5. Simulazione del movimento
 
-Il movimento di un utente viene simulato attraverso percorsi memorizzati in file CSV nella cartella `data`. Ogni file rappresenta un tragitto ed è composto dalle colonne `time`, `latitude` e `longitude`: il tempo indica quando deve essere inviata una posizione rispetto all’inizio del viaggio, mentre latitudine e longitudine identificano la coordinata geografica. I percorsi disponibili vengono individuati automaticamente dall'interfaccia client e possono essere selezionati tramite il loro numero o il nome del file.
+Il movimento di un utente viene simulato attraverso percorsi memorizzati in file CSV nella cartella `data`. Ogni file rappresenta un tragitto ed è composto dalle colonne `time`, `latitude` e `longitude`: il tempo indica quando deve essere inviata una posizione rispetto all’inizio del viaggio, mentre latitudine e longitudine identificano la coordinata geografica. I percorsi disponibili vengono individuati automaticamente dall’interfaccia client e possono essere selezionati tramite il loro numero o il nome del percorso.
 
-Prima di avviare la simulazione, il client legge e valida l’intero percorso. Il file deve contenere almeno un punto, la prima posizione deve essere associata al tempo `00:00` e tutte le successive devono essere distanziate esattamente di 30 secondi. Viene inoltre verificata la validità delle coordinate geografiche. Sono ammesse coordinate consecutive uguali purché rispettino l’intervallo temporale di 30 secondi, questa situazione viene utilizzata per rappresentare i periodi in cui il veicolo rimane fermo.
+Prima di avviare la simulazione, il client legge e valida l’intero percorso. Il file deve contenere almeno un punto, la prima posizione deve essere associata al tempo `00:00` e tutte le successive devono essere distanziate esattamente di 30 secondi. Viene inoltre verificata la validità delle coordinate geografiche. Sono ammesse coordinate consecutive uguali, purché rispettino l’intervallo temporale di 30 secondi. Questa situazione viene utilizzata per rappresentare i periodi in cui il veicolo rimane fermo.
 
-Dopo la validazione, il client invia al server il messaggio `StartTrip` e avvia il simulatore: il primo punto viene trasmesso immediatamente; per ciascun punto successivo il simulatore attende il tempo previsto e lo invia, tramite un canale asincrono, al ciclo di gestione del client. Questo componente gestisce gli eventi provenienti dalla tastiera, dal simulatore e dalla connessione WebSocket; quando riceve una nuova posizione la converte in un messaggio `PositionUpdate` e la trasmette al server, tramite WebSocket, insieme al tempo logico trascorso, non modificato da fattori di velocità.
+Dopo la validazione, il client invia al server il messaggio `StartTrip` e avvia il simulatore. Il primo punto viene trasmesso immediatamente; per ciascun punto successivo il simulatore attende il tempo previsto e lo invia, tramite un canale asincrono, al ciclo di gestione del client. Questo componente gestisce gli eventi provenienti dalla tastiera, dal simulatore e dalla connessione WebSocket; quando riceve una nuova posizione la converte in un messaggio `PositionUpdate` e la trasmette al server insieme al tempo logico trascorso, che non viene modificato dal fattore di velocità.
 
 Anche il server verifica i tempi logici contenuti negli aggiornamenti: il primo punto deve avere tempo zero e ogni punto successivo deve avanzare di 30 secondi. In questo modo non si affida esclusivamente alla validazione eseguita dal client.
 
@@ -222,7 +223,7 @@ Dopo un salvataggio riuscito il tragitto viene rimosso dalla memoria. I punti re
 
 ### 7.3 Elaborazione delle statistiche
 
-La console amministrativa permette di interrogare le statistiche di uno specifico utente per il giorno, la settimana o il mese corrente. Per la settimana viene considerato come inizio il lunedì, mentre per il mese viene utilizzato il primo giorno. Le query sommano la distanza, il tempo di movimento e il tempo di pausa dei tragitti compresi nel periodo selezionato.
+La console amministrativa permette di interrogare le statistiche di uno specifico utente per il giorno, la settimana o il mese corrente. Gli intervalli sono determinati a partire dalla data UTC del server: per la settimana viene considerato come inizio il lunedì, mentre per il mese viene utilizzato il primo giorno. Le query sommano la distanza, il tempo di movimento e il tempo di pausa dei tragitti compresi nel periodo selezionato.
 
 La velocità media viene calcolata dividendo la distanza complessiva per il solo tempo trascorso in movimento e convertendo il risultato in chilometri orari. Le pause non entrano quindi nel denominatore; se non è presente alcun tempo di movimento, il valore restituito è zero.
 
@@ -232,25 +233,25 @@ Il sistema di messaggistica permette alla console amministrativa e ai client con
 
 ### 8.1 Gestione delle connessioni e canali Tokio
 
-Il server memorizza in `AppState` un'istanza di `MessageService`. Quando un client apre una connessione WebSocket, l'handler della socket chiede al servizio di associare la connessione all'utente. Il servizio crea un canale `tokio::sync::mpsc` per quel client e memorizza il `Sender` in una mappa indicizzata dall'identificativo dell'utente; il `Receiver` viene invece restituito all'handler della socket. 
+Il server memorizza in `AppState` un’istanza di `MessageService`. Quando un client apre una connessione WebSocket, l’handler della socket chiede al servizio di associare la connessione all’utente. Il servizio crea un canale `tokio::sync::mpsc` per quel client e memorizza il `Sender` in una mappa indicizzata dall’identificativo dell’utente; il `Receiver` viene invece restituito all’handler della socket.
 
-Per i messaggi broadcast viene usato un canale `tokio::sync::broadcast`. Ogni connessione possiede una propria sottoscrizione e riceve gli eventi pubblicati sul canale. 
+Per i messaggi broadcast viene usato un canale `tokio::sync::broadcast`. Ogni connessione possiede una propria sottoscrizione e riceve gli eventi pubblicati sul canale.
 
-Quando la connessione WebSocket è attiva, l'handler ascolta sia i messaggi in ingresso sulla socket sia quelli pubblicati sul canale `mpsc` dell'utente e sul canale broadcast, utilizzando `tokio::select!`. I messaggi ricevuti dai canali vengono serializzati in JSON tramite il crate `serde` e inviati sulla WebSocket. Quando la connessione termina, il client viene rimosso dal registro.
+Quando la connessione WebSocket è attiva, l’handler ascolta sia i messaggi in ingresso sulla socket sia quelli pubblicati sul canale `mpsc` dell’utente e sul canale broadcast, utilizzando `tokio::select!`. I messaggi ricevuti dai canali vengono serializzati in JSON tramite Serde e inviati sulla WebSocket. Quando la connessione termina, il client viene rimosso dal registro.
 
 ### 8.2 Persistenza e consegna
 
 Tutti i messaggi vengono memorizzati nella tabella `messages` di SQLite con il tipo, il testo, la data di creazione, gli identificativi di mittente e destinatario e un flag di lettura. Il tipo può essere `client_to_server`, `direct` o `broadcast`.
 
-Un messaggio diretto viene inizialmente marcato come non letto. Quando il client lo riceve, invia un messaggio di acknowledgment specificando l'identificativo del messaggio ricevuto; il server aggiorna il flag di lettura del messaggio. Questa scelta permette di non perdere i messaggi diretti quando il destinatario è offline. Alla successiva connessione il server recupera i record non letti e li invia in ordine cronologico. I messaggi broadcast invece vengono consegnati agli utenti iscritti al momento della pubblicazione e non vengono riproposti dopo una disconnessione.
+Un messaggio diretto viene inizialmente marcato come non letto. Quando il client lo riceve, invia una conferma `DirectTextAck` con l’identificativo del messaggio; il server aggiorna quindi il relativo flag di lettura. Se il destinatario è offline, il record rimane non letto e viene recuperato alla connessione successiva insieme agli altri messaggi pendenti, in ordine cronologico. I broadcast vengono invece consegnati agli utenti collegati al momento della pubblicazione e non vengono riproposti a chi era offline.
 
-La console accede periodicamente alla tabella dei messaggi per mostrare all'amministratore i messaggi inviati e ricevuti.
+La console accede periodicamente alla tabella per mostrare all’amministratore gli ultimi 100 messaggi inviati e ricevuti.
 
 ### 8.3 Validazione e gestione degli errori
 
-Il server rifiuta i messaggi vuoti e quelli più lunghi di 200 caratteri. Inoltre non accetta l'invio di messaggi a client inesistenti. Il servizio di messaggistica può produrre gli errori `ValidationError`, `NotFound` e `DatabaseError`. Gli errori di validazione vengono restituiti al client tramite un messaggio di errore con codice `validation_error`; gli errori relativi all'utente destinatario utilizzano invece il codice `not_found`. Gli errori SQLite vengono registrati nei log e comunicati all'esterno con il codice generico `internal_error`.
+I messaggi inviati dal client al server non possono essere vuoti né superare il limite di lunghezza previsto dal servizio. Anche i messaggi creati dalla console amministrativa devono contenere testo e, nel caso di un invio diretto, il destinatario deve corrispondere a un utente registrato. Il servizio può produrre gli errori `ValidationError`, `NotFound` e `DatabaseError`. Gli errori di validazione vengono restituiti al client con il codice `validation_error`, mentre gli errori SQLite vengono registrati nei log e comunicati all’esterno con il codice generico `internal_error`.
 
-Infine, un errore durante la serializzazione o l'invio di un messaggio al client interrompe la connessione; i messaggi diretti già salvati rimangono però disponibili per la consegna successiva.
+Un errore durante la serializzazione o l’invio di un messaggio al client interrompe la connessione; i messaggi diretti già salvati rimangono comunque disponibili per un tentativo di consegna successivo.
 
 ## 9. Interfacce testuali
 
@@ -273,8 +274,6 @@ L’amministratore può visualizzare gli utenti registrati con `users`, consulta
 ### 9.3 Gestione del terminale e degli eventi
 
 Crossterm abilita la modalità raw, lo schermo alternativo e la lettura asincrona di tastiera e mouse tramite `EventStream`. Le interfacce utilizzano `tokio::select!` per attendere contemporaneamente gli eventi del terminale e quelli prodotti dalle altre attività dell’applicazione. Una struttura `TerminalSession` si occupa dell’inizializzazione e implementa `Drop` per ripristinare il terminale anche quando l’esecuzione termina a causa di un errore.
-
-## 10. Verifica e test
 
 ## 10. Verifica e test
 
@@ -301,7 +300,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 La pipeline GitHub Actions esegue questi controlli su `windows-latest` e `ubuntu-latest` per push e pull request relativi ai branch `dev` e `main`, oltre a consentire l’avvio manuale. I job delle due piattaforme sono indipendenti e utilizzano una cache per le dipendenze e la cartella `target`. La build release completa viene eseguita per i push su `main` e per le pull request dirette a `main`; quando parte una nuova esecuzione sullo stesso riferimento, quella precedente viene annullata per evitare lavoro duplicato.
 
-Non sono presenti test di integrazione che avviano realmente server e client come processi separati. Le interazioni complete, come la riconnessione, il rifiuto delle connessioni duplicate e la consegna dei messaggi tra più client, vengono quindi controllate anche tramite prove manuali.
+Non sono presenti test di integrazione che avviano realmente server e client come processi separati. Le interazioni complete, come la riconnessione, il rifiuto delle connessioni duplicate e la consegna dei messaggi tra più client, richiedono quindi anche una verifica manuale.
 
 ## 11. Prestazioni e dimensione degli eseguibili
 
@@ -311,11 +310,13 @@ All’avvio del server viene avviato un task dedicato al monitoraggio della CPU.
 
 Il tempo relativo all’intervallo viene stimato moltiplicando la percentuale di utilizzo per i 120 secondi trascorsi. Il valore cumulativo è la somma delle stime prodotte nei diversi intervalli: non rappresenta quindi una misura esatta fornita dal sistema operativo, ma un’indicazione dell’attività del processo nel corso dell’esecuzione.
 
+Oltre al monitoraggio della CPU, il server utilizza `tracing` per registrare nella cartella `logs` gli eventi relativi alle connessioni WebSocket, agli errori e al completamento dei tragitti. Questi log vengono organizzati su base giornaliera.
+
 ### 11.2 Scelte relative alle prestazioni
 
 Le operazioni di rete e di accesso ai dati sono asincrone, così una connessione in attesa non blocca l’elaborazione delle altre. Il server utilizza un pool SQLite con un massimo di 50 connessioni e canali con capacità limitata per la comunicazione interna. Anche i dati caricati periodicamente dalla console sono limitati: la dashboard mostra gli ultimi 100 messaggi e il comando `logs` recupera fino a 10 messaggi associati all’utente richiesto.
 
-Non sono stati introdotti benchmark sintetici, perché il carico previsto per il progetto è contenuto. La valutazione si basa sui test automatici, sul monitoraggio periodico della CPU e sulla dimensione delle build release.
+Non sono stati introdotti benchmark sintetici. La valutazione delle risorse impiegate si basa sul monitoraggio periodico della CPU e sulla dimensione delle build release, mentre la correttezza delle funzionalità viene verificata dalla suite di test.
 
 ### 11.3 Dimensione degli eseguibili
 
@@ -338,11 +339,12 @@ Le principali scelte progettuali presentano vantaggi e limiti coerenti con le di
 |---|---|---|
 | Percorsi CSV | Simulazioni ripetibili e facilmente verificabili. | I percorsi devono essere preparati in anticipo e rispettare il formato previsto. |
 | SQLite | Persistenza locale semplice e disponibile su entrambe le piattaforme verificate. | Lo schema non dispone di migrazioni versionate e il database rimane legato alla singola istanza del server. |
-| Token e utenti online in memoria | Gestione diretta e coerente con le WebSocket attive. | I token vengono persi al riavvio e le sessioni devono essere autenticate nuovamente. |
+| Utenti online mantenuti in memoria | La console riflette direttamente le WebSocket attive, senza dipendere da uno stato persistente che potrebbe non essere aggiornato. | L’elenco viene ricostruito a ogni avvio del server. |
+| Token mantenuti in memoria | Il client può riutilizzare il token per riconnettersi senza ripetere il login. | I token vengono persi al riavvio e le sessioni devono essere autenticate nuovamente. |
 | WebSocket e canali Tokio | Comunicazione bidirezionale senza richieste ripetute e separazione tra messaggi diretti e broadcast. | I broadcast non vengono recuperati dagli utenti che erano offline. |
 | Salvataggio al completamento | I dati del tragitto e i relativi punti vengono inseriti in un’unica transazione. | Un tragitto interrotto viene scartato interamente. |
 | Interfacce testuali | Uso di librerie multipiattaforma senza dipendenze da un ambiente grafico specifico. | Non è disponibile una rappresentazione grafica dei percorsi. |
-| Test unitari e CI multipiattaforma | Le regole principali vengono verificate automaticamente a ogni modifica. | Mancano test end-to-end tra processi client e server reali. |
+| Test unitari e CI multipiattaforma | Le regole principali vengono verificate automaticamente nelle esecuzioni previste dalla pipeline. | Mancano test end-to-end tra processi client e server reali. |
 
 Alcune informazioni sono già predisposte per sviluppi successivi. In particolare, la tabella `trips_points` conserva tutte le coordinate dei tragitti completati, anche se l’interfaccia attuale utilizza soltanto i valori aggregati presenti in `trips`. Questi dati potrebbero essere impiegati per ricostruire e visualizzare graficamente i percorsi.
 
