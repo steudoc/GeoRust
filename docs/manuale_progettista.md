@@ -5,7 +5,14 @@
 - [1. Introduzione](#1-introduzione)
 - [2. Analisi dei requisiti](#2-analisi-dei-requisiti)
 - [3. Architettura del sistema](#3-architettura-del-sistema)
+  - [3.1 Crate `common`](#31-crate-common)
+  - [3.2 Crate `client`](#32-crate-client)
+  - [3.3 Crate `server`](#33-crate-server)
 - [4. Protocollo client-server](#4-protocollo-client-server)
+  - [4.1 Registrazione e autenticazione](#41-registrazione-e-autenticazione)
+  - [4.2 Apertura della WebSocket](#42-apertura-della-websocket)
+  - [4.3 Messaggi scambiati](#43-messaggi-scambiati)
+  - [4.4 Ciclo della connessione](#44-ciclo-della-connessione)
 - [5. Simulazione del movimento](#5-simulazione-del-movimento)
 - [6. Macchina a stati del tragitto](#6-macchina-a-stati-del-tragitto)
 - [7. Persistenza e modello dei dati](#7-persistenza-e-modello-dei-dati)
@@ -42,7 +49,7 @@ L’applicazione utilizza Tokio per coordinare le attività che devono procedere
 | Controllo del consumo di CPU | Il server registra ogni 120 secondi l’utilizzo della CPU, una stima del tempo CPU impiegato nell’ultimo intervallo e la stima cumulativa dall’avvio del processo. |
 | Esecuzione su almeno due piattaforme | La compilazione e i controlli automatici vengono eseguiti tramite GitHub Actions su Windows e Ubuntu. |
 
-Per rendere la simulazione ripetibile è stata scelta l’emulazione tramite file CSV. Gli stessi percorsi possono così essere eseguiti più volte e produrre risultati confrontabili. Nelle build di debug è inoltre disponibile un fattore di velocità che riduce i tempi di attesa reali senza modificare i tempi logici inviati al server.
+Per rendere la simulazione ripetibile è stata scelta l’emulazione tramite file CSV. Gli stessi percorsi possono così essere eseguiti più volte e produrre risultati confrontabili. Nelle build di debug è inoltre disponibile un *fattore di velocità* che riduce i tempi di attesa reali senza modificare i tempi logici inviati al server.
 
 I dati relativi agli utenti, ai tragitti e ai messaggi vengono salvati in SQLite. Le informazioni che dipendono dalle connessioni attive, come gli utenti online e i token di autenticazione, vengono invece mantenute in memoria dal server.
 
@@ -50,18 +57,95 @@ I dati relativi agli utenti, ai tragitti e ai messaggi vengono salvati in SQLite
 
 GeoRust è organizzato come un workspace Cargo composto da tre crate: `common`, `client` e `server`. Questa suddivisione permette di separare le responsabilità principali e di condividere tra client e server i tipi comuni utilizzati nella comunicazione.
 
+### 3.1 Crate `common`
+
 Il crate `common` contiene i tipi utilizzati da entrambe le applicazioni: al suo interno sono definiti i dati scambiati durante la registrazione e il login, i messaggi del protocollo WebSocket, gli stati dell’utente e il tipo che rappresenta una coordinata geografica. La condivisione di questi tipi riduce il rischio che client e server interpretino diversamente lo stesso messaggio.
+
+| File | Responsabilità |
+|---|---|
+| `common/src/lib.rs` | Definisce i dati condivisi tra client e server: richieste e risposte REST, stati dell’utente e messaggi del protocollo WebSocket. Contiene inoltre l’intervallo logico di 30 secondi utilizzato per le posizioni. |
+| `common/src/tracking.rs` | Definisce il tipo `Coordinata` e verifica che latitudine e longitudine appartengano agli intervalli geografici validi. La validazione viene applicata anche durante la deserializzazione dei messaggi ricevuti. |
+
+### 3.2 Crate `client`
 
 Il crate `client` gestisce l’interazione con l’utente: si occupa dell’autenticazione tramite richieste HTTP, della selezione e validazione dei percorsi CSV, della simulazione temporale del movimento e della comunicazione con il server attraverso WebSocket.
 
+| File | Responsabilità |
+|---|---|
+| `client/src/main.rs` | Avvia la console del client. |
+| `client/src/console/mod.rs` | Dichiara i moduli della console e ne espone il punto di ingresso. |
+| `client/src/console/auth.rs` | Gestisce l’interfaccia di registrazione e login e invia le relative richieste REST al server. |
+| `client/src/console/app.rs` | Contiene lo stato dell’interfaccia, interpreta i comandi dell’utente e gestisce la selezione dei percorsi disponibili. |
+| `client/src/console/runtime.rs` | Coordina gli eventi della tastiera, la connessione WebSocket, il simulatore e i tentativi di riconnessione. |
+| `client/src/console/ui.rs` | Definisce il layout e il rendering dell’interfaccia testuale tramite Ratatui. |
+| `client/src/movement/mod.rs` | Definisce il punto di un percorso e rende disponibili il caricamento dei CSV e il simulatore. |
+| `client/src/movement/csv_route.rs` | Legge i percorsi CSV e ne verifica formato, intervalli temporali e coordinate. |
+| `client/src/movement/simulator.rs` | Riproduce temporalmente i punti del percorso e li rende disponibili al ciclo di gestione del client. |
+
+### 3.3 Crate `server`
 
 Il crate `server` espone le API REST e l’endpoint WebSocket, autentica le connessioni dei client, mantiene l’elenco degli utenti collegati, gestisce i tragitti attivi e salva nel database quelli completati. Si occupa inoltre delle statistiche, della messaggistica, della console amministrativa e della registrazione periodica dell’utilizzo della CPU.
 
-La comunicazione utilizza due protocolli differenti:
-1.  Le operazioni di registrazione e login vengono eseguite tramite endpoint REST su HTTP, perché sono richieste isolate. 
-2.  Dopo l’autenticazione viene aperta una WebSocket, più adatta allo scambio bidirezionale e continuativo di posizioni e messaggi.
+| File | Responsabilità |
+|---|---|
+| `server/src/main.rs` | Inizializza il database e lo stato condiviso, configura le API REST e la WebSocket e avvia il server e la console amministrativa. |
+| `server/src/auth.rs` | Implementa registrazione e login, hashing delle password e generazione dei token di autenticazione. |
+| `server/src/state.rs` | Contiene lo stato condiviso dell’applicazione e gestisce i tragitti attivi, l’accesso ai dati e il salvataggio transazionale dei tragitti completati. |
+| `server/src/trip.rs` | Implementa la macchina a stati del tragitto e calcola tempi di movimento, tempi di pausa e distanza percorsa. |
+| `server/src/stats.rs` | Calcola le statistiche giornaliere, settimanali e mensili a partire dai tragitti salvati. |
+| `server/src/messaging.rs` | Gestisce la persistenza e la consegna dei messaggi diretti e broadcast, oltre all’elenco degli utenti connessi. |
+| `server/src/cpu_usage.rs` | Registra periodicamente l’utilizzo della CPU del processo server. |
+| `server/src/console/mod.rs` | Dichiara i moduli della console amministrativa e ne espone il punto di ingresso. |
+| `server/src/console/app.rs` | Contiene lo stato della console e interpreta i comandi dell’amministratore. |
+| `server/src/console/runtime.rs` | Coordina gli eventi della console e richiama le funzionalità relative a utenti, messaggi e statistiche. |
+| `server/src/console/tui.rs` | Definisce il layout e il rendering della console amministrativa. |
 
 ## 4. Protocollo client-server
+
+La comunicazione tra client e server avviene in due fasi. Le operazioni iniziali di registrazione e login utilizzano richieste REST su HTTP, mentre le posizioni e i messaggi vengono scambiati attraverso una connessione WebSocket persistente.
+
+### 4.1 Registrazione e autenticazione
+
+Il server espone gli endpoint `POST /register` e `POST /login`. La registrazione riceve username e password, verifica che i dati non siano vuoti e salva la password sotto forma di hash generato con Argon2. Dopo una registrazione completata, il client esegue automaticamente il login.
+
+Durante il login il server confronta la password ricevuta con l’hash memorizzato nel database. Se le credenziali sono valide, genera un token UUID e lo associa all’identificativo dell’utente. Il token viene mantenuto in memoria dal server e restituito al client insieme allo `user_id`.
+
+### 4.2 Apertura della WebSocket
+
+Dopo l’autenticazione, il client apre una connessione verso l’endpoint `GET /ws` e inserisce il token nell’header `Authorization` come token Bearer. Il server verifica il token prima di accettare l’aggiornamento della connessione a WebSocket. Una richiesta priva di un token valido viene rifiutata, così come il tentativo di aprire una seconda WebSocket per un utente già connesso.
+
+La WebSocket permette una comunicazione bidirezionale: il server può inviare informazioni al client senza attendere una nuova richiesta HTTP e, nello stesso tempo, continuare a ricevere posizioni e messaggi dall’utente. Il client conserva il token ottenuto durante il login e lo riutilizza negli eventuali tentativi di riconnessione.
+
+### 4.3 Messaggi scambiati
+
+I messaggi applicativi sono definiti nel crate `common` e vengono convertiti in JSON tramite Serde. In questo modo client e server utilizzano la stessa rappresentazione dei dati.
+
+I principali messaggi inviati dal client sono:
+
+| Messaggio | Funzione |
+|---|---|
+| `StartTrip` | Richiede la creazione di un nuovo tragitto. |
+| `PositionUpdate` | Invia una coordinata e il relativo tempo logico. |
+| `TripCompleted` | Comunica che tutti i punti del percorso sono stati trasmessi. |
+| `Text` | Invia un messaggio testuale al server. |
+| `DirectTextAck` | Conferma la ricezione di un messaggio diretto. |
+
+I principali messaggi inviati dal server sono:
+
+| Messaggio | Funzione |
+|---|---|
+| `TripStarted` | Conferma la creazione del tragitto. |
+| `PositionAccepted` | Conferma una posizione e comunica lo stato corrente dell’utente. |
+| `TripCompleted` | Restituisce il riepilogo del tragitto completato. |
+| `DirectText` | Contiene un messaggio destinato a uno specifico utente. |
+| `BroadcastText` | Contiene un messaggio inviato a tutti gli utenti connessi. |
+| `Error` | Comunica un errore attraverso un codice e un messaggio descrittivo. |
+
+### 4.4 Ciclo della connessione
+
+Dopo l’apertura della WebSocket, il client può scambiare messaggi con il server anche mentre è in corso un tragitto. Quando il percorso termina regolarmente, il client invia `TripCompleted`; il server conclude il tragitto, salva i dati e restituisce un riepilogo. Successivamente chiude la WebSocket e il client tenta automaticamente di riconnettersi utilizzando lo stesso token.
+
+Se la connessione viene interrotta durante la simulazione, il client arresta il simulatore e non invia il messaggio di completamento. Il server rimuove l’utente dall’elenco dei client connessi e scarta l’eventuale tragitto ancora attivo, evitando di salvare un viaggio incompleto.
 
 ## 5. Simulazione del movimento
 
