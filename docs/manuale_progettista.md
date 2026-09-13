@@ -199,7 +199,7 @@ La distanza totale viene calcolata sommando la distanza tra ogni coppia di coord
 
 ## 7. Persistenza e modello dei dati
 
-La persistenza è affidata a SQLite tramite il crate SQLx. All’avvio il server apre il file `db.sqlite` in modalità lettura e scrittura e crea, se non sono già presenti, le tabelle e l’indice necessari. Il file deve quindi esistere prima dell’avvio del server, mentre lo schema viene inizializzato dal programma.
+La persistenza è affidata a SQLite tramite il crate SQLx. All’avvio il server apre il file `db.sqlite` in modalità lettura e scrittura e, se il file non esiste, ne richiede la creazione tramite `create_if_missing`. Successivamente inizializza lo schema creando le tabelle e l’indice non ancora presenti.
 
 ### 7.1 Struttura del database
 
@@ -323,7 +323,8 @@ Le dimensioni sono state misurate dopo l’esecuzione di `cargo build --workspac
 
 | Eseguibile | Profilo | Dimensione in KiB | Dimensione in MiB |
 |---|---|---:|---:|
-| `server.exe` | release | 6.515 | 6,36 |
-| `client.exe` | release | 3.473 | 3,39 |
+| `server.exe` | release | 6.472 | 6,32 |
+| `client.exe` | release | 3.430 | 3,35 |
+
 
 Il crate `common` è una libreria collegata ai due programmi e non produce un eseguibile autonomo.

@@ -116,5 +116,5 @@ Ogni nuova posizione è associata a un intervallo logico di 30 secondi.
 ## Documentazione
 
 - [Manuale utente](./docs/manuale_utente.md): installazione, avvio e utilizzo dell’applicazione.
-- [Manuale del progettista](./docs/manuale_progettista.md): architettura, scelte implementative, analisi e valutazione del progetto.
+- [Manuale del progettista](./docs/manuale_progettista.md): architettura, scelte implementative e analisi del progetto.
 - [Verifiche su Linux](./docs/tests_on_Linux.md): controlli eseguiti in ambiente Linux.
