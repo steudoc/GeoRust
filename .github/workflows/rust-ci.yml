@@ -1,0 +1,80 @@
+name: Rust CI
+
+on:
+    push:
+      # git push duretti su questi branch 
+      branches: [dev, main]
+
+    pull_request:
+      # pull request diretta a questi branch
+      branches: [dev, main]
+
+    workflow_dispatch: # avvio manuale della pipeline su richiesta
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}   # chiave univoca dell'esecuzione 
+  cancel-in-progress: true    # se arriva un nuovo job mentre uno vecchio è ancora in eseuzione, interrompe il vecchio per fare subito il nuovo 
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false  # se uno dei due job fallisce non interrompe anche l'altro: esecuzioni indipendenti 
+      matrix:
+        os:
+          # esegue in parallelo su due macchine virtuali separate
+          - windows-latest
+          - ubuntu-latest
+
+    steps:
+      # cloniamo il repository nelle macchine virtuali 
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Seleziono versione stable Rust
+        run: rustup default stable
+
+      - name: Installo componenti Rust
+        run: rustup component add rustfmt clippy
+
+      # cache per non riscaricare e ricompilare tutte le librerie esterne a ogni singolo push: valocizziamo i tempi di job 
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Mostrare versioni Rust
+        run: |
+          rustc -Vv
+          cargo -V
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Cargo tests
+        run: cargo test --workspace --all-targets
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Cargo Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build release
+      # solo per push o PR su main, evitando di allungare i tempi di job eseguendo la build anche su dev
+        if: >
+          github.ref == 'refs/heads/main' ||
+          (github.event_name == 'pull_request' && github.base_ref == 'main')
+        run: cargo build --workspace --release
