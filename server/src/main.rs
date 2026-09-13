@@ -50,7 +50,9 @@ async fn main() -> anyhow::Result<()> {
 
     // db
     let db_url = format!("sqlite://{DB_PATH}?mode=rw");
-    let connection_options = SqliteConnectOptions::from_str(&db_url)?.foreign_keys(true);
+    let connection_options = SqliteConnectOptions::from_str(&db_url)?
+        .create_if_missing(true)
+        .foreign_keys(true);
 
     // Crea un pool di connessioni al database SQLite
     let pool = SqlitePoolOptions::new()
