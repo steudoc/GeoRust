@@ -34,7 +34,6 @@
   - [11.1 Registrazione dell’utilizzo della CPU](#111-registrazione-dellutilizzo-della-cpu)
   - [11.2 Scelte relative alle prestazioni](#112-scelte-relative-alle-prestazioni)
   - [11.3 Dimensione degli eseguibili](#113-dimensione-degli-eseguibili)
-- [12. Valutazione finale](#12-valutazione-finale)
 
 ## 1. Introduzione
 
@@ -320,32 +319,11 @@ Non sono stati introdotti benchmark sintetici. La valutazione delle risorse impi
 
 ### 11.3 Dimensione degli eseguibili
 
-Le dimensioni sono state misurate il 12 settembre 2026 dopo l’esecuzione di `cargo build --workspace --release`, su Windows x86-64 con toolchain Rust 1.94.1:
+Le dimensioni sono state misurate dopo l’esecuzione di `cargo build --workspace --release`, su Windows x86-64 MSVC con toolchain Rust 1.94.1:
 
-| Eseguibile | Dimensione in byte | Dimensione in MiB |
-|---|---:|---:|
-| `client.exe` | 4.201.472 | 4,01 |
-| `server.exe` | 6.808.064 | 6,49 |
+| Eseguibile | Profilo | Dimensione in KiB | Dimensione in MiB |
+|---|---|---:|---:|
+| `server.exe` | release | 6.515 | 6,36 |
+| `client.exe` | release | 3.473 | 3,39 |
 
-Il crate `common` è una libreria collegata ai due programmi e non produce un eseguibile autonomo. Le dimensioni riportate dipendono dalla piattaforma, dal compilatore e dalle versioni delle dipendenze, quindi possono variare in build eseguite in ambienti differenti.
-
-## 12. Valutazione finale
-
-L’implementazione copre le funzionalità richieste: registrazione e autenticazione, ricezione periodica delle posizioni, gestione degli stati, analisi dei tragitti e comunicazione testuale. La separazione nei tre crate mantiene condiviso il protocollo senza mescolare la logica del client con quella del server. L’uso di Tokio permette inoltre di gestire nello stesso programma connessioni, interfaccia testuale e attività periodiche senza ricorrere a un thread dedicato per ogni operazione.
-
-Le principali scelte progettuali presentano vantaggi e limiti coerenti con le dimensioni del progetto:
-
-| Scelta | Vantaggio | Limite |
-|---|---|---|
-| Percorsi CSV | Simulazioni ripetibili e facilmente verificabili. | I percorsi devono essere preparati in anticipo e rispettare il formato previsto. |
-| SQLite | Persistenza locale semplice e disponibile su entrambe le piattaforme verificate. | Lo schema non dispone di migrazioni versionate e il database rimane legato alla singola istanza del server. |
-| Utenti online mantenuti in memoria | La console riflette direttamente le WebSocket attive, senza dipendere da uno stato persistente che potrebbe non essere aggiornato. | L’elenco viene ricostruito a ogni avvio del server. |
-| Token mantenuti in memoria | Il client può riutilizzare il token per riconnettersi senza ripetere il login. | I token vengono persi al riavvio e le sessioni devono essere autenticate nuovamente. |
-| WebSocket e canali Tokio | Comunicazione bidirezionale senza richieste ripetute e separazione tra messaggi diretti e broadcast. | I broadcast non vengono recuperati dagli utenti che erano offline. |
-| Salvataggio al completamento | I dati del tragitto e i relativi punti vengono inseriti in un’unica transazione. | Un tragitto interrotto viene scartato interamente. |
-| Interfacce testuali | Uso di librerie multipiattaforma senza dipendenze da un ambiente grafico specifico. | Non è disponibile una rappresentazione grafica dei percorsi. |
-| Test unitari e CI multipiattaforma | Le regole principali vengono verificate automaticamente nelle esecuzioni previste dalla pipeline. | Mancano test end-to-end tra processi client e server reali. |
-
-Alcune informazioni sono già predisposte per sviluppi successivi. In particolare, la tabella `trips_points` conserva tutte le coordinate dei tragitti completati, anche se l’interfaccia attuale utilizza soltanto i valori aggregati presenti in `trips`. Questi dati potrebbero essere impiegati per ricostruire e visualizzare graficamente i percorsi.
-
-Ulteriori evoluzioni potrebbero riguardare la persistenza o la scadenza dei token, l’introduzione di migrazioni per lo schema SQLite, la configurazione esterna dei percorsi e test di integrazione completi. La soluzione attuale mantiene però un perimetro adeguato al progetto: le componenti principali sono separate, le regole sul movimento sono verificabili e i dati conclusivi vengono salvati senza lasciare registrazioni parziali.
+Il crate `common` è una libreria collegata ai due programmi e non produce un eseguibile autonomo.
