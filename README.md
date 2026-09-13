@@ -1,6 +1,8 @@
 # GeoRust
 
-GeoRust è un’applicazione client/server sviluppata in Rust per simulare la geolocalizzazione di una flotta di veicoli. Ogni client rappresenta un utente che può registrarsi, autenticarsi, percorrere un tragitto descritto da un file CSV e comunicare con il server. Il server riceve le posizioni, riconosce i periodi di movimento e di sosta, salva i tragitti completati e permette di consultare statistiche aggregate.
+GeoRust è un’applicazione client/server sviluppata in Rust per simulare la geolocalizzazione di una flotta di veicoli. <br>
+Ogni client rappresenta un utente che può registrarsi, autenticarsi, percorrere un tragitto descritto da un file CSV e comunicare con il server. <br>
+Il server riceve le posizioni, riconosce i periodi di movimento e di sosta, salva i tragitti completati e permette di consultare statistiche aggregate.
 
 ## Funzionalità principali
 
@@ -38,7 +40,9 @@ G8/
 └── docs/      manuali e documentazione del progetto
 ```
 
-Il client e il server utilizzano Tokio per le attività asincrone e comunicano tramite richieste HTTP e una connessione WebSocket. Il server è realizzato con Axum e salva utenti, tragitti e messaggi in un database SQLite tramite SQLx. Le interfacce testuali sono costruite con Ratatui e Crossterm.
+Il client e il server utilizzano Tokio per le attività asincrone e comunicano tramite richieste HTTP e una connessione WebSocket.<br> 
+Il server è realizzato con Axum e salva utenti, tragitti e messaggi in un database SQLite tramite SQLx.<br> 
+Le interfacce testuali sono costruite con Ratatui e Crossterm.<br>
 
 ## Requisiti
 
@@ -48,7 +52,8 @@ Per compilare ed eseguire il progetto sono necessari:
 - un terminale compatibile con Crossterm;
 - la porta TCP `3000` disponibile sul computer che esegue il server.
 
-Il progetto è stato verificato su Windows e Linux. Le misurazioni riportate nella documentazione sono state effettuate con la toolchain Rust 1.94.1. SQLite è utilizzato localmente e non richiede l’installazione di un server di database separato.
+Il progetto è stato verificato su Windows e Linux.<br>
+SQLite è utilizzato localmente e non richiede l’installazione di un server di database separato.
 
 ## Avvio rapido
 
@@ -70,7 +75,8 @@ Il server deve essere in esecuzione prima di effettuare la registrazione o il lo
 
 ## Utilizzo essenziale
 
-All’avvio, il client permette di registrare un nuovo utente premendo `r` oppure di accedere con un account esistente premendo `l`. Dopo l’autenticazione sono disponibili i seguenti comandi:
+All’avvio, il client permette di registrare un nuovo utente premendo `r` oppure di accedere con un account esistente premendo `l`. <br>
+Dopo l’autenticazione sono disponibili i seguenti comandi:
 
 | Comando | Descrizione |
 |---|---|
@@ -94,7 +100,8 @@ Per la descrizione completa delle interfacce e delle operazioni disponibili cons
 
 ## Percorsi disponibili
 
-I file nella cartella [`data`](./data/) contengono le coordinate e i tempi logici utilizzati dalla simulazione. Ogni nuova posizione è associata a un intervallo logico di 30 secondi.
+I file nella cartella [`data`](./data/) contengono le coordinate e i tempi logici utilizzati dalla simulazione.<br> 
+Ogni nuova posizione è associata a un intervallo logico di 30 secondi.
 
 | Percorso | Punti | Durata (min) | Distanza | Movimento (s) | Sosta (s) | Velocità media |
 |---|---:|:---:|---:|:---:|:---:|---:|
