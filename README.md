@@ -3,8 +3,8 @@
 ![cover](./docs/img_manuale_utente/interfaccia_iniziale_server.png)
 
 ## Description
-GeoRust is a client/server application developed in Rust to simulate the geolocation of a fleet of vehicles.<br>
-Each client represents a user who can register, authenticate, follow a route described by a CSV file, and communicate with the server. <br>
+GeoRust is a client/server application developed in Rust to simulate the geolocation of a fleet of vehicles. 
+Each client represents a user who can register, authenticate, follow a route described by a CSV file, and communicate with the server. 
 The server receives positions, detects moving and idle periods, saves completed routes, and allows querying aggregate statistics.
 
 ## Key Features
